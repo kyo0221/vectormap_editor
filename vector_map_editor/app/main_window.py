@@ -6,6 +6,7 @@ import cv2
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QAction, QKeySequence
 from PySide6.QtWidgets import (
+    QCheckBox,
     QComboBox,
     QFileDialog,
     QFormLayout,
@@ -18,11 +19,12 @@ from PySide6.QtWidgets import (
     QPushButton,
     QSlider,
     QStatusBar,
+    QTabWidget,
     QVBoxLayout,
     QWidget,
 )
 
-from vector_map_editor.canvas.map_canvas import MapCanvas
+from vector_map_editor.canvas.map_canvas import ASSIST_RESAMPLE_SPACING_M, MapCanvas
 from vector_map_editor.io.xml_io import load_map_xml, save_map_xml
 from vector_map_editor.model.enums import AreaSubtype, ConnectionType, FeatureType, LaneletSubtype, LineStringSubtype
 from vector_map_editor.model.map_data import LaneConnection, MapLanelet
@@ -77,6 +79,9 @@ class MainWindow(QMainWindow):
         mode_layout.addWidget(btn_point)
         mode_layout.addWidget(btn_line)
 
+        edit_tab = QWidget()
+        edit_layout = QVBoxLayout(edit_tab)
+
         class_box = QGroupBox("Class")
         class_layout = QFormLayout(class_box)
         self.feature_type = QComboBox()
@@ -117,6 +122,30 @@ class MainWindow(QMainWindow):
         conn_layout.addRow("Type", self.conn_type)
         conn_layout.addRow(btn_conn)
 
+        edit_layout.addWidget(class_box)
+        edit_layout.addWidget(lanelet_box)
+        edit_layout.addWidget(conn_box)
+        edit_layout.addStretch(1)
+
+        assist_tab = QWidget()
+        assist_layout = QVBoxLayout(assist_tab)
+        assist_box = QGroupBox("White-pixel Assist")
+        assist_form = QFormLayout(assist_box)
+        self.assist_enabled = QCheckBox("Enable")
+        self.assist_enabled.toggled.connect(self.canvas.set_assist_enabled)
+        self.resample_line_id = QLineEdit()
+        btn_resample = QPushButton("Resample LineString")
+        btn_resample.clicked.connect(self._resample_line_string)
+        assist_form.addRow("Assist", self.assist_enabled)
+        assist_form.addRow("LineString ID", self.resample_line_id)
+        assist_form.addRow(btn_resample)
+        assist_layout.addWidget(assist_box)
+        assist_layout.addStretch(1)
+
+        tabs = QTabWidget()
+        tabs.addTab(edit_tab, "Edit")
+        tabs.addTab(assist_tab, "Assist")
+
         image_box = QGroupBox("Image")
         image_layout = QVBoxLayout(image_box)
         btn_image = QPushButton("Load lane.png")
@@ -134,9 +163,7 @@ class MainWindow(QMainWindow):
         image_layout.addLayout(opacity_row)
 
         layout.addWidget(mode_box)
-        layout.addWidget(class_box)
-        layout.addWidget(lanelet_box)
-        layout.addWidget(conn_box)
+        layout.addWidget(tabs)
         layout.addWidget(image_box)
         layout.addStretch(1)
 
@@ -326,6 +353,16 @@ class MainWindow(QMainWindow):
                 "Input Error",
                 "Connection values are invalid (IDs must be ints, type must match enum)",
             )
+
+    def _resample_line_string(self) -> None:
+        try:
+            line_id = int(self.resample_line_id.text().strip())
+            self.canvas.resample_line_string(line_id, spacing_m=ASSIST_RESAMPLE_SPACING_M)
+            self._refresh_summary()
+        except ValueError:
+            QMessageBox.warning(self, "Input Error", "LineString ID must be an integer")
+        except RuntimeError as exc:
+            QMessageBox.warning(self, "Resample Error", str(exc))
 
     def _refresh_summary(self) -> None:
         vm = self.canvas.vector_map
