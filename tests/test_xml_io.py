@@ -2,11 +2,11 @@ from pathlib import Path
 
 import pytest
 
-from vector_map_editor.io.xml_io import load_map_xml, save_map_xml
-from vector_map_editor.canvas.map_canvas import MapCanvas
 from vector_map_editor.model.coordinates import local_meter_to_pixel, pixel_to_local_meter
 from vector_map_editor.model.enums import ConnectionType, LineRole, LineStringSubtype, LineType, MarkingType
+from vector_map_editor.model.geometry import infer_centerline_points, resample_polyline
 from vector_map_editor.model.map_data import LaneConnection, MapArea, MapLanelet, MapLineString, MapPoint, VectorMap
+from vector_map_editor.io.xml_io import load_map_xml, save_map_xml
 
 
 def test_save_load_roundtrip(tmp_path: Path) -> None:
@@ -103,11 +103,26 @@ def test_pixel_local_meter_roundtrip() -> None:
 
 
 def test_resample_polyline_uses_three_meter_spacing() -> None:
-    samples = MapCanvas._resample_polyline([(0.0, 0.0), (7.5, 0.0)], 3.0)
+    samples = resample_polyline([(0.0, 0.0), (7.5, 0.0)], 3.0)
 
     assert samples == [
         (0.0, 0.0),
         (3.0, 0.0),
         (6.0, 0.0),
         (7.5, 0.0),
+    ]
+
+
+def test_infer_centerline_points_orients_boundaries() -> None:
+    samples = infer_centerline_points(
+        left_points=[(0.0, 0.0), (9.0, 0.0)],
+        right_points=[(9.0, 4.0), (0.0, 4.0)],
+        spacing_m=3.0,
+    )
+
+    assert samples == [
+        (0.0, 2.0),
+        (3.0, 2.0),
+        (6.0, 2.0),
+        (9.0, 2.0),
     ]

@@ -24,9 +24,10 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from vector_map_editor.canvas.map_canvas import ASSIST_RESAMPLE_SPACING_M, MapCanvas
+from vector_map_editor.canvas.map_canvas import MapCanvas
 from vector_map_editor.io.xml_io import load_map_xml, save_map_xml
 from vector_map_editor.model.enums import AreaSubtype, ConnectionType, FeatureType, LaneletSubtype, LineStringSubtype
+from vector_map_editor.model.geometry import ASSIST_RESAMPLE_SPACING_M
 from vector_map_editor.model.map_data import LaneConnection, MapLanelet
 
 
@@ -136,9 +137,14 @@ class MainWindow(QMainWindow):
         self.resample_line_id = QLineEdit()
         btn_resample = QPushButton("Resample LineString")
         btn_resample.clicked.connect(self._resample_line_string)
+        self.infer_center_lanelet_id = QLineEdit()
+        btn_infer_center = QPushButton("Infer Center Line")
+        btn_infer_center.clicked.connect(self._infer_center_line)
         assist_form.addRow("Assist", self.assist_enabled)
         assist_form.addRow("LineString ID", self.resample_line_id)
         assist_form.addRow(btn_resample)
+        assist_form.addRow("Lanelet ID", self.infer_center_lanelet_id)
+        assist_form.addRow(btn_infer_center)
         assist_layout.addWidget(assist_box)
         assist_layout.addStretch(1)
 
@@ -363,6 +369,16 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "Input Error", "LineString ID must be an integer")
         except RuntimeError as exc:
             QMessageBox.warning(self, "Resample Error", str(exc))
+
+    def _infer_center_line(self) -> None:
+        try:
+            lanelet_id = int(self.infer_center_lanelet_id.text().strip())
+            self.canvas.infer_center_line(lanelet_id, spacing_m=ASSIST_RESAMPLE_SPACING_M)
+            self._refresh_summary()
+        except ValueError:
+            QMessageBox.warning(self, "Input Error", "Lanelet ID must be an integer")
+        except RuntimeError as exc:
+            QMessageBox.warning(self, "Center Line Error", str(exc))
 
     def _refresh_summary(self) -> None:
         vm = self.canvas.vector_map

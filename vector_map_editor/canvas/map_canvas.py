@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-import heapq
 
 import numpy as np
 import pyqtgraph as pg
@@ -9,14 +8,20 @@ from PySide6.QtCore import Qt
 from PySide6.QtGui import QKeySequence, QMouseEvent
 
 from vector_map_editor.model.coordinates import local_meter_to_pixel, pixel_to_local_meter
-from vector_map_editor.model.enums import AreaSubtype, FeatureType, LineStringSubtype
+from vector_map_editor.model.enums import (
+    AreaSubtype,
+    FeatureType,
+    LineRole,
+    LineStringSubtype,
+    LineType,
+    MarkingType,
+)
+from vector_map_editor.model.geometry import ASSIST_RESAMPLE_SPACING_M, infer_centerline_points, resample_polyline
 from vector_map_editor.model.map_data import MapArea, MapLineString, MapPoint, VectorMap
+from vector_map_editor.tools.white_pixel_assist import create_white_mask, snap_to_white_pixel, trace_white_pixel_path
 
 
 UndoAction = dict[str, object]
-WHITE_PIXEL_THRESHOLD = 40
-WHITE_PIXEL_SNAP_RADIUS = 30
-ASSIST_RESAMPLE_SPACING_M = 3.0
 
 
 class MapCanvas(pg.PlotWidget):
@@ -97,11 +102,7 @@ class MapCanvas(pg.PlotWidget):
         corrected = image
 
         self._background_item.setImage(corrected)
-        if corrected.ndim == 3:
-            gray = np.mean(corrected[:, :, :3], axis=2)
-        else:
-            gray = corrected
-        self._white_mask = gray > WHITE_PIXEL_THRESHOLD
+        self._white_mask = create_white_mask(corrected)
         # アスペクト比を保つため、画像のサイズに基づいてrectを設定
         h, w = corrected.shape[:2]
         self._bg_size = (w, h)
@@ -155,7 +156,9 @@ class MapCanvas(pg.PlotWidget):
 
             if self.mode == "line" and self.assist_enabled:
                 try:
-                    snapped_x, snapped_y = self._snap_to_white_pixel((x_pixel, y_pixel))
+                    if self._white_mask is None:
+                        raise RuntimeError("Assist requires a loaded binary image")
+                    snapped_x, snapped_y = snap_to_white_pixel(self._white_mask, (x_pixel, y_pixel))
                 except RuntimeError as exc:
                     self.on_status(str(exc))
                     ev.accept()
@@ -335,6 +338,23 @@ class MapCanvas(pg.PlotWidget):
             self.on_status(f"Undid LineString resampling: {action['line_id']}")
             return True
 
+        if action_type == "infer_centerline":
+            lanelet_id = int(action["lanelet_id"])
+            line_id = int(action["line_id"])
+            point_ids = [int(pid) for pid in action["point_ids"]]
+            lanelet = self._lanelet_by_id(lanelet_id)
+            if lanelet is None:
+                raise RuntimeError(f"Lanelet {lanelet_id} no longer exists")
+            lanelet.centerline_id = action["old_centerline_id"] if action["old_centerline_id"] is None else int(action["old_centerline_id"])
+            self._remove_line(line_id)
+            for point_id in reversed(point_ids):
+                self._remove_point_if_unreferenced(point_id)
+            self._sync_next_ids()
+            self.redraw_all()
+            self._notify_changed()
+            self.on_status(f"Undid inferred centerline: {line_id}")
+            return True
+
         raise RuntimeError(f"Unknown undo action type: {action_type}")
 
     def register_lanelet_created(self, lanelet_id: int) -> None:
@@ -355,6 +375,55 @@ class MapCanvas(pg.PlotWidget):
         self.on_status(f"Resampled LineString {line_id} at {spacing_m:.1f} m")
         return True
 
+    def infer_center_line(self, lanelet_id: int, spacing_m: float = ASSIST_RESAMPLE_SPACING_M) -> bool:
+        lanelet = self._lanelet_by_id(lanelet_id)
+        if lanelet is None:
+            self.on_status(f"Lanelet not found: {lanelet_id}")
+            return False
+        if lanelet.centerline_id is not None:
+            raise RuntimeError(f"Lanelet {lanelet_id} already has centerline {lanelet.centerline_id}")
+
+        left_line = self._line_by_id(lanelet.left_boundary_line_id)
+        right_line = self._line_by_id(lanelet.right_boundary_line_id)
+        if left_line is None or right_line is None:
+            raise RuntimeError(f"Lanelet {lanelet_id} requires valid left and right LineStrings")
+
+        left_points = self._line_local_points(left_line)
+        right_points = self._line_local_points(right_line)
+        center_points = infer_centerline_points(left_points, right_points, spacing_m)
+
+        point_ids: list[int] = []
+        for x_m, y_m in center_points:
+            point_ids.append(self._add_point(x_m, y_m))
+
+        line = MapLineString(
+            id=self._next_line_id,
+            subtype=LineStringSubtype.DASHED,
+            line_type=LineType.LANE_CENTERLINE,
+            line_role=LineRole.LANE_CENTERLINE,
+            marking_type=MarkingType.VIRTUAL,
+            point_ids=point_ids,
+            is_observable=False,
+        )
+        self.vector_map.lines.append(line)
+        self._next_line_id += 1
+
+        old_centerline_id = lanelet.centerline_id
+        lanelet.centerline_id = line.id
+        self._undo_stack.append(
+            {
+                "type": "infer_centerline",
+                "lanelet_id": lanelet_id,
+                "old_centerline_id": old_centerline_id,
+                "line_id": line.id,
+                "point_ids": point_ids,
+            }
+        )
+        self.redraw_all()
+        self._notify_changed()
+        self.on_status(f"Inferred centerline {line.id} for Lanelet {lanelet_id}")
+        return True
+
     def _add_point(self, x: float, y: float) -> int:
         point = MapPoint(id=self._next_point_id, x=x, y=y)
         self.vector_map.points.append(point)
@@ -367,9 +436,11 @@ class MapCanvas(pg.PlotWidget):
             raise RuntimeError("Current LineString references an unknown point")
 
         start_pixel = local_meter_to_pixel(previous_point.x, previous_point.y)
-        pixel_path = self._trace_white_pixel_path(start_pixel, (x_pixel, y_pixel))
+        if self._white_mask is None:
+            raise RuntimeError("Assist requires a loaded binary image")
+        pixel_path = trace_white_pixel_path(self._white_mask, start_pixel, (x_pixel, y_pixel))
         local_path = [pixel_to_local_meter(float(px), float(py)) for px, py in pixel_path]
-        local_samples = self._resample_polyline(local_path, self.assist_spacing_m)
+        local_samples = resample_polyline(local_path, self.assist_spacing_m)
         if len(local_samples) < 2:
             raise RuntimeError("Assisted segment is too short to add points")
 
@@ -437,6 +508,12 @@ class MapCanvas(pg.PlotWidget):
         for point in self.vector_map.points:
             if point.id == point_id:
                 return point
+        return None
+
+    def _lanelet_by_id(self, lanelet_id: int):
+        for lanelet in self.vector_map.lanelets:
+            if lanelet.id == lanelet_id:
+                return lanelet
         return None
 
     def _draw_points(self) -> None:
@@ -509,6 +586,12 @@ class MapCanvas(pg.PlotWidget):
                 return line
         return None
 
+    def _line_local_points(self, line: MapLineString) -> list[tuple[float, float]]:
+        points = [self._point_by_id(pid) for pid in line.point_ids]
+        if any(point is None for point in points):
+            raise RuntimeError(f"LineString {line.id} references unknown points")
+        return [(point.x, point.y) for point in points if point is not None]
+
     def _remove_line(self, line_id: int) -> None:
         self.vector_map.lines = [line for line in self.vector_map.lines if line.id != line_id]
 
@@ -557,7 +640,7 @@ class MapCanvas(pg.PlotWidget):
             raise RuntimeError(f"LineString {line_id} references unknown points")
 
         local_points = [(point.x, point.y) for point in old_points if point is not None]
-        resampled = self._resample_polyline(local_points, spacing_m)
+        resampled = resample_polyline(local_points, spacing_m)
         if len(resampled) < 2:
             raise RuntimeError(f"LineString {line_id} is too short to resample")
 
@@ -581,141 +664,6 @@ class MapCanvas(pg.PlotWidget):
             "new_point_ids": new_point_ids,
             "removed_points": removed_points,
         }
-
-    def _trace_white_pixel_path(
-        self,
-        start_pixel: tuple[float, float],
-        end_pixel: tuple[float, float],
-    ) -> list[tuple[int, int]]:
-        if self._white_mask is None:
-            raise RuntimeError("Assist requires a loaded binary image")
-
-        start = self._snap_to_white_pixel(start_pixel)
-        goal = self._snap_to_white_pixel(end_pixel)
-        if start == goal:
-            return [start]
-
-        height, width = self._white_mask.shape
-        open_heap: list[tuple[float, float, tuple[int, int]]] = []
-        heapq.heappush(open_heap, (self._pixel_distance(start, goal), 0.0, start))
-        came_from: dict[tuple[int, int], tuple[int, int]] = {}
-        best_cost: dict[tuple[int, int], float] = {start: 0.0}
-        neighbors = [
-            (-1, 0, 1.0),
-            (1, 0, 1.0),
-            (0, -1, 1.0),
-            (0, 1, 1.0),
-            (-1, -1, 2**0.5),
-            (-1, 1, 2**0.5),
-            (1, -1, 2**0.5),
-            (1, 1, 2**0.5),
-        ]
-
-        while open_heap:
-            _, current_cost, current = heapq.heappop(open_heap)
-            if current == goal:
-                return self._reconstruct_pixel_path(came_from, current)
-            if current_cost > best_cost[current]:
-                continue
-
-            cx, cy = current
-            for dx, dy, step_cost in neighbors:
-                nx = cx + dx
-                ny = cy + dy
-                if nx < 0 or ny < 0 or nx >= width or ny >= height:
-                    continue
-                if not self._white_mask[ny, nx]:
-                    continue
-                next_point = (nx, ny)
-                new_cost = current_cost + step_cost
-                if new_cost >= best_cost.get(next_point, float("inf")):
-                    continue
-                best_cost[next_point] = new_cost
-                came_from[next_point] = current
-                priority = new_cost + self._pixel_distance(next_point, goal)
-                heapq.heappush(open_heap, (priority, new_cost, next_point))
-
-        raise RuntimeError("No connected white-pixel path found between the selected points")
-
-    def _snap_to_white_pixel(
-        self,
-        pixel: tuple[float, float],
-        max_radius: int = WHITE_PIXEL_SNAP_RADIUS,
-    ) -> tuple[int, int]:
-        if self._white_mask is None:
-            raise RuntimeError("Assist requires a loaded binary image")
-
-        x = int(round(pixel[0]))
-        y = int(round(pixel[1]))
-        height, width = self._white_mask.shape
-        if x < 0 or y < 0 or x >= width or y >= height:
-            raise RuntimeError("Selected point is outside the loaded image")
-        if self._white_mask[y, x]:
-            return x, y
-
-        best: tuple[int, int] | None = None
-        best_distance = float("inf")
-        x_min = max(0, x - max_radius)
-        x_max = min(width - 1, x + max_radius)
-        y_min = max(0, y - max_radius)
-        y_max = min(height - 1, y + max_radius)
-        for yy in range(y_min, y_max + 1):
-            for xx in range(x_min, x_max + 1):
-                if not self._white_mask[yy, xx]:
-                    continue
-                distance = self._pixel_distance((x, y), (xx, yy))
-                if distance < best_distance:
-                    best_distance = distance
-                    best = (xx, yy)
-        if best is None:
-            raise RuntimeError("No white pixel found near the selected point")
-        return best
-
-    @staticmethod
-    def _reconstruct_pixel_path(
-        came_from: dict[tuple[int, int], tuple[int, int]],
-        current: tuple[int, int],
-    ) -> list[tuple[int, int]]:
-        path = [current]
-        while current in came_from:
-            current = came_from[current]
-            path.append(current)
-        path.reverse()
-        return path
-
-    @staticmethod
-    def _resample_polyline(points: list[tuple[float, float]], spacing_m: float) -> list[tuple[float, float]]:
-        if spacing_m <= 0.0:
-            raise ValueError("Resampling spacing must be positive")
-        if len(points) < 2:
-            return points.copy()
-
-        distances = [0.0]
-        for p1, p2 in zip(points, points[1:]):
-            distances.append(distances[-1] + float(np.hypot(p2[0] - p1[0], p2[1] - p1[1])))
-        total_length = distances[-1]
-        if total_length == 0.0:
-            raise RuntimeError("Cannot resample a zero-length polyline")
-
-        sample_distances = list(np.arange(0.0, total_length, spacing_m))
-        if not sample_distances or sample_distances[-1] != total_length:
-            sample_distances.append(total_length)
-
-        samples: list[tuple[float, float]] = []
-        segment_index = 0
-        for target_distance in sample_distances:
-            while segment_index < len(distances) - 2 and distances[segment_index + 1] < target_distance:
-                segment_index += 1
-            start_distance = distances[segment_index]
-            end_distance = distances[segment_index + 1]
-            p1 = points[segment_index]
-            p2 = points[segment_index + 1]
-            if end_distance == start_distance:
-                samples.append(p1)
-                continue
-            ratio = (target_distance - start_distance) / (end_distance - start_distance)
-            samples.append((p1[0] + (p2[0] - p1[0]) * ratio, p1[1] + (p2[1] - p1[1]) * ratio))
-        return samples
 
     def _hover_text_at(self, x_pixel: float, y_pixel: float) -> str:
         labels: list[str] = []
@@ -795,7 +743,3 @@ class MapCanvas(pg.PlotWidget):
         closest_x = ax + t * dx
         closest_y = ay + t * dy
         return float(np.hypot(px - closest_x, py - closest_y))
-
-    @staticmethod
-    def _pixel_distance(p1: tuple[int, int], p2: tuple[int, int]) -> float:
-        return float(np.hypot(p2[0] - p1[0], p2[1] - p1[1]))

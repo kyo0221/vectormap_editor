@@ -96,6 +96,8 @@ vector-map-editor
 
 **Resample LineString** は、入力したLineString IDの点列を3m間隔に再配置します。Resample後も **Ctrl+Z** で取り消せます。
 
+**Infer Center Line** は、入力したLanelet IDの左境界LineStringと右境界LineStringから、3m間隔のcenterlineを自動生成します。左右境界の向きが逆の場合は自動で揃えます。既にcenterlineが設定されているLaneletに対しては、意図しない上書きを避けるためエラーにします。
+
 ### 座標系
 
 キャンバス上のクリック位置は背景画像のpixel座標として取得され、内部データと保存ファイルではlocal meter座標として管理されます。local座標の原点は画像原点です。
