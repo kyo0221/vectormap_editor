@@ -1,0 +1,1511 @@
+### vector mapを作成するためのpythonツール
+
+
+# Vector Map GUI 作成ツール 設計書
+
+## 1. 目的
+
+本ツールは、航空写真・俯瞰画像・コース画像などを背景に重ねながら、GUI操作によって軽量なVector Mapを作成・編集するためのPythonアプリケーションである。
+
+対象とするVector Mapは、Autoware / Lanelet2の考え方を参考にしつつ、白線マッチング、経路追従、分岐接続、将来的なカメラ画像からのベクターマップ推論に利用しやすいよう、以下の要素を中心に構成する。
+
+* Point
+* LineString
+* Lanelet / Lane
+* LaneConnection
+* Route
+* Optional: Crosswalk / StopLine / Annotation
+
+ROSには依存しない。保存形式はJSONまたはYAMLとし、必要に応じてROS msgやLanelet2形式へ変換できる構造にする。
+
+---
+
+## 2. 想定ユースケース
+
+### 2.1 白線マッチング用地図の作成
+
+カメラで検出した白線、停止線、横断歩道線などと照合するため、実環境上の線要素をLineStringとして作成する。
+
+### 2.2 経路追従用centerlineの作成
+
+各レーンごとに仮想的なcenterlineを作成し、ロボットが追従すべき基準経路として利用する。
+
+### 2.3 分岐・合流の接続関係の作成
+
+Lane同士の接続関係を定義し、分岐路での経路選択やルート管理に利用する。
+
+### 2.4 将来的な学習データ作成
+
+画像からVector Mapを推論するネットワークの教師データとして、以下の情報を出力できるようにする。
+
+* 白線境界
+* レーンcenterline
+* 横断歩道線
+* 停止線
+* レーン接続グラフ
+* 各要素のsemantic class
+
+---
+
+## 3. 基本方針
+
+### 3.1 Lanelet2風だが軽量にする
+
+完全なLanelet2互換を目指すのではなく、必要な概念だけを抽出する。
+
+```text
+Point → LineString → Lanelet → LaneConnection
+```
+
+### 3.2 観測可能な線と仮想線を分ける
+
+カメラ画像に直接映る線と、地図上だけに存在する仮想線を区別する。
+
+```text
+Observable Line:
+  白線、停止線、横断歩道線、道路端
+
+Virtual Line:
+  lane centerline、仮想境界線
+```
+
+### 3.3 GUI上では編集しやすさを優先する
+
+内部データ構造は厳密に保ちつつ、GUIでは以下を重視する。
+
+* 左クリックで点を追加
+* 右クリックまたはEnterで確定
+* Escでキャンセル
+* Deleteで選択要素削除
+* ドラッグで点移動
+* タブで編集モード切り替え
+* 背景画像の表示・透明度調整
+* ズーム・パン操作
+
+---
+
+## 4. 使用ライブラリ
+
+## 4.1 推奨構成
+
+GUIには **PySide6 + pyqtgraph** を推奨する。
+
+### 理由
+
+* PySide6はQtベースで本格的なGUIを作りやすい
+* タブ、ツールバー、プロパティ編集、ダイアログを実装しやすい
+* pyqtgraphは画像表示、ズーム、パン、2D図形描画が軽い
+* OpenCVやNumPyとの相性がよい
+* 将来的に独自描画やスナップ機能を追加しやすい
+
+### 使用ライブラリ一覧
+
+```text
+PySide6
+pyqtgraph
+numpy
+opencv-python
+pydantic
+PyYAML
+shapely
+scipy
+```
+
+### 各ライブラリの役割
+
+| ライブラリ         | 用途                     |
+| ------------- | ---------------------- |
+| PySide6       | GUI本体、タブ、メニュー、プロパティパネル |
+| pyqtgraph     | 画像表示、ズーム、パン、2D描画       |
+| numpy         | 座標計算、配列処理              |
+| opencv-python | 背景画像読み込み、透過合成、座標変換補助   |
+| pydantic      | データモデル定義、保存前バリデーション    |
+| PyYAML        | YAML保存・読み込み            |
+| shapely       | 線・ポリゴン・最近傍・交差判定        |
+| scipy         | KDTree、スナップ、最近傍探索      |
+
+---
+
+## 5. パッケージ構成案
+
+```text
+vector_map_editor/
+├── pyproject.toml
+├── README.md
+├── assets/
+│   └── icons/
+├── examples/
+│   ├── sample_course.png
+│   └── sample_map.yaml
+├── vector_map_editor/
+│   ├── __init__.py
+│   ├── main.py
+│   │
+│   ├── app/
+│   │   ├── __init__.py
+│   │   ├── main_window.py
+│   │   ├── actions.py
+│   │   └── settings.py
+│   │
+│   ├── model/
+│   │   ├── __init__.py
+│   │   ├── map_data.py
+│   │   ├── enums.py
+│   │   ├── validators.py
+│   │   └── geometry.py
+│   │
+│   ├── io/
+│   │   ├── __init__.py
+│   │   ├── yaml_io.py
+│   │   ├── json_io.py
+│   │   ├── image_io.py
+│   │   └── export.py
+│   │
+│   ├── canvas/
+│   │   ├── __init__.py
+│   │   ├── map_canvas.py
+│   │   ├── layers.py
+│   │   ├── drawing_items.py
+│   │   └── interaction.py
+│   │
+│   ├── tools/
+│   │   ├── __init__.py
+│   │   ├── base_tool.py
+│   │   ├── point_tool.py
+│   │   ├── line_tool.py
+│   │   ├── lanelet_tool.py
+│   │   ├── connection_tool.py
+│   │   ├── route_tool.py
+│   │   ├── select_tool.py
+│   │   └── edit_tool.py
+│   │
+│   ├── widgets/
+│   │   ├── __init__.py
+│   │   ├── tool_tabs.py
+│   │   ├── property_panel.py
+│   │   ├── layer_panel.py
+│   │   ├── object_tree.py
+│   │   └── status_bar.py
+│   │
+│   └── utils/
+│       ├── __init__.py
+│       ├── id_generator.py
+│       ├── snapping.py
+│       └── transform.py
+└── tests/
+    ├── test_model.py
+    ├── test_io.py
+    └── test_geometry.py
+```
+
+---
+
+## 6. データモデル
+
+## 6.1 基本概念
+
+```text
+MapPoint:
+  座標点
+
+MapLineString:
+  MapPointの列で構成される線
+
+MapLanelet:
+  左境界線、右境界線、centerlineを束ねたレーン
+
+LaneConnection:
+  Lanelet同士の接続関係
+
+Route:
+  実際に走行するlanelet列
+```
+
+---
+
+## 6.2 Enum定義
+
+### LineType
+
+```python
+class LineType(str, Enum):
+    UNKNOWN = "unknown"
+    WHITE_LINE = "white_line"
+    YELLOW_LINE = "yellow_line"
+    STOP_LINE = "stop_line"
+    CROSSWALK_LINE = "crosswalk_line"
+    ROAD_EDGE = "road_edge"
+    LANE_CENTERLINE = "lane_centerline"
+    VIRTUAL_LINE = "virtual_line"
+```
+
+### LineRole
+
+```python
+class LineRole(str, Enum):
+    UNKNOWN = "unknown"
+    LEFT_BOUNDARY = "left_boundary"
+    RIGHT_BOUNDARY = "right_boundary"
+    LANE_CENTERLINE = "lane_centerline"
+    ROAD_CENTER_MARKING = "road_center_marking"
+    STOP_LINE = "stop_line"
+    CROSSWALK_STRIPE = "crosswalk_stripe"
+    ROAD_EDGE = "road_edge"
+    VIRTUAL_BOUNDARY = "virtual_boundary"
+```
+
+### MarkingType
+
+```python
+class MarkingType(str, Enum):
+    UNKNOWN = "unknown"
+    SOLID = "solid"
+    DASHED = "dashed"
+    DOUBLE = "double"
+    VIRTUAL = "virtual"
+```
+
+### ConnectionType
+
+```python
+class ConnectionType(str, Enum):
+    UNKNOWN = "unknown"
+    STRAIGHT = "straight"
+    LEFT = "left"
+    RIGHT = "right"
+    MERGE = "merge"
+    BRANCH = "branch"
+    U_TURN = "u_turn"
+```
+
+---
+
+## 6.3 Pythonデータクラス案
+
+Pydanticを使い、保存時の型チェックを行う。
+
+```python
+from pydantic import BaseModel, Field
+from typing import List, Optional
+
+class MapPoint(BaseModel):
+    id: int
+    x: float
+    y: float
+    z: float = 0.0
+
+class MapLineString(BaseModel):
+    id: int
+    name: str = ""
+    line_type: LineType = LineType.UNKNOWN
+    line_role: LineRole = LineRole.UNKNOWN
+    marking_type: MarkingType = MarkingType.UNKNOWN
+    point_ids: List[int]
+    is_observable: bool = True
+
+class MapLanelet(BaseModel):
+    id: int
+    name: str = ""
+    left_boundary_line_id: Optional[int] = None
+    right_boundary_line_id: Optional[int] = None
+    centerline_id: Optional[int] = None
+    associated_line_ids: List[int] = Field(default_factory=list)
+    width: Optional[float] = None
+    is_virtual: bool = False
+
+class LaneConnection(BaseModel):
+    id: int
+    from_lanelet_id: int
+    to_lanelet_id: int
+    connection_type: ConnectionType = ConnectionType.UNKNOWN
+    cost: float = 1.0
+
+class RouteSegment(BaseModel):
+    lanelet_id: int
+    target_speed_mps: Optional[float] = None
+    turn_direction: ConnectionType = ConnectionType.UNKNOWN
+
+class Route(BaseModel):
+    id: int
+    name: str = ""
+    segments: List[RouteSegment] = Field(default_factory=list)
+
+class VectorMap(BaseModel):
+    map_id: str
+    map_version: str = "0.1.0"
+    frame_id: str = "map"
+    points: List[MapPoint] = Field(default_factory=list)
+    lines: List[MapLineString] = Field(default_factory=list)
+    lanelets: List[MapLanelet] = Field(default_factory=list)
+    connections: List[LaneConnection] = Field(default_factory=list)
+    routes: List[Route] = Field(default_factory=list)
+```
+
+---
+
+## 7. 保存形式
+
+## 7.1 YAML形式
+
+初期実装ではYAMLを推奨する。人間が編集・確認しやすいため。
+
+```yaml
+map_id: course_001
+map_version: 0.1.0
+frame_id: map
+
+points:
+  - {id: 1, x: 0.0, y: 0.0, z: 0.0}
+  - {id: 2, x: 5.0, y: 0.0, z: 0.0}
+
+lines:
+  - id: 101
+    name: outer_left_boundary
+    line_type: white_line
+    line_role: left_boundary
+    marking_type: solid
+    point_ids: [1, 2]
+    is_observable: true
+
+  - id: 201
+    name: lane_001_centerline
+    line_type: lane_centerline
+    line_role: lane_centerline
+    marking_type: virtual
+    point_ids: [11, 12]
+    is_observable: false
+
+lanelets:
+  - id: 301
+    name: outer_lane_001
+    left_boundary_line_id: 101
+    right_boundary_line_id: 102
+    centerline_id: 201
+    associated_line_ids: []
+    width: 1.2
+    is_virtual: false
+
+connections:
+  - id: 401
+    from_lanelet_id: 301
+    to_lanelet_id: 302
+    connection_type: straight
+    cost: 1.0
+```
+
+## 7.2 JSON形式
+
+機械処理やWebツール連携を考えるならJSON出力も用意する。
+
+## 7.3 Export形式
+
+将来的に以下をサポートする。
+
+```text
+- YAML
+- JSON
+- CSV
+- GeoJSON
+- Lanelet2-like OSM
+- ROS msg変換用 intermediate format
+```
+
+---
+
+## 8. GUI構成
+
+## 8.1 メイン画面
+
+```text
++-------------------------------------------------------------+
+| Menu Bar                                                    |
+| File Edit View Tools Export Help                            |
++-------------------------------------------------------------+
+| Tool Tabs       | Canvas                           | Property |
+|-----------------|----------------------------------|----------|
+| Select          |                                  | selected |
+| Point           |      background image            | object   |
+| LineString      |      + vector map overlay        | fields   |
+| Lanelet         |                                  |          |
+| Connection      |                                  |          |
+| Route           |                                  |          |
+| Image           |                                  |          |
++-------------------------------------------------------------+
+| Object Tree / Layer Panel                                   |
++-------------------------------------------------------------+
+| Status Bar: x, y, zoom, current tool, selected object        |
++-------------------------------------------------------------+
+```
+
+---
+
+## 8.2 主要UI部品
+
+### Canvas
+
+地図編集の中心領域。
+
+機能：
+
+* 背景画像表示
+* 点・線・Lanelet・Connectionの描画
+* ズーム・パン
+* クリックによる作図
+* ドラッグによる編集
+* スナップ表示
+* 選択要素のハイライト
+
+### Tool Tabs
+
+左側に配置する編集モード選択タブ。
+
+```text
+Select
+Point
+LineString
+Lanelet
+Connection
+Route
+Image
+```
+
+### Property Panel
+
+右側に配置する選択要素の属性編集欄。
+
+例：LineString選択時
+
+```text
+id
+name
+line_type
+line_role
+marking_type
+is_observable
+point_ids
+```
+
+### Object Tree
+
+下部または左側に配置するオブジェクト一覧。
+
+```text
+Points
+Lines
+Lanelets
+Connections
+Routes
+```
+
+### Layer Panel
+
+表示・非表示を切り替える。
+
+```text
+Background Image
+Points
+White Lines
+Centerlines
+Lanelets
+Connections
+Routes
+```
+
+---
+
+## 9. 操作仕様
+
+## 9.1 共通操作
+
+| 操作            | 内容                |
+| ------------- | ----------------- |
+| 左クリック         | 点の追加、要素選択、決定      |
+| 右クリック         | 作図中の確定、コンテキストメニュー |
+| ダブルクリック       | 作図中のLineString確定  |
+| Enter         | 現在の作図を確定          |
+| Esc           | 現在の作図をキャンセル       |
+| Delete        | 選択要素削除            |
+| Ctrl+Z        | Undo              |
+| Ctrl+Y        | Redo              |
+| Ctrl+S        | 保存                |
+| Ctrl+O        | 開く                |
+| マウスホイール       | ズーム               |
+| 中クリックドラッグ     | パン                |
+| Shift + 左クリック | スナップを一時無効化        |
+
+---
+
+## 9.2 Selectモード
+
+目的：既存要素の選択・編集。
+
+操作：
+
+```text
+左クリック:
+  最も近い要素を選択
+
+点をドラッグ:
+  Point座標を移動
+
+LineStringをクリック:
+  線を選択
+
+Laneletをクリック:
+  Laneletを選択
+
+Delete:
+  選択要素を削除
+```
+
+選択優先度：
+
+```text
+Point > LineString > Lanelet > Connection
+```
+
+---
+
+## 9.3 Point作成モード
+
+目的：単独のMapPointを作成。
+
+操作：
+
+```text
+左クリック:
+  クリック位置にPointを作成
+```
+
+オプション：
+
+```text
+Snap to grid
+Snap to existing point
+Snap to line
+```
+
+---
+
+## 9.4 LineString作成モード
+
+目的：白線、停止線、横断歩道線、centerlineなどを作成。
+
+操作：
+
+```text
+左クリック:
+  点を追加
+
+右クリック / Enter / ダブルクリック:
+  LineStringを確定
+
+Esc:
+  作成中のLineStringを破棄
+```
+
+作成前にTool Panelで以下を選ぶ。
+
+```text
+line_type:
+  white_line / stop_line / crosswalk_line / lane_centerline / road_edge / virtual_line
+
+line_role:
+  left_boundary / right_boundary / lane_centerline / road_center_marking / crosswalk_stripe / stop_line
+
+marking_type:
+  solid / dashed / double / virtual
+
+is_observable:
+  true / false
+```
+
+### LineString作成例
+
+#### 白線境界
+
+```text
+line_type = white_line
+line_role = left_boundary
+marking_type = solid
+is_observable = true
+```
+
+#### レーンcenterline
+
+```text
+line_type = lane_centerline
+line_role = lane_centerline
+marking_type = virtual
+is_observable = false
+```
+
+#### 横断歩道線
+
+```text
+line_type = crosswalk_line
+line_role = crosswalk_stripe
+marking_type = solid
+is_observable = true
+```
+
+---
+
+## 9.5 Lanelet作成モード
+
+目的：left boundary、right boundary、centerlineを束ねて1つの走行レーンを作成する。
+
+操作方法は2案ある。
+
+### A案：既存LineStringを選択して作成
+
+推奨。
+
+```text
+1. Laneletタブを選択
+2. left_boundaryとして使うLineStringをクリック
+3. right_boundaryとして使うLineStringをクリック
+4. centerlineとして使うLineStringをクリック
+5. Enterで確定
+```
+
+GUI表示：
+
+```text
+Step 1/3: Select left boundary
+Step 2/3: Select right boundary
+Step 3/3: Select centerline
+```
+
+### B案：Lanelet作成時にcenterlineを自動生成
+
+```text
+1. left_boundaryを選択
+2. right_boundaryを選択
+3. Generate Centerlineボタンを押す
+4. centerline候補を作成
+5. 必要なら手動修正
+6. Enterで確定
+```
+
+centerline自動生成は初期実装では簡易でよい。
+
+```text
+left/right boundaryの対応点数をリサンプリング
+同じ割合の点同士の中点を取る
+中点列をcenterlineとする
+```
+
+---
+
+## 9.6 LaneConnection作成モード
+
+目的：Lanelet間の接続関係を作成する。
+
+操作：
+
+```text
+1. Connectionタブを選択
+2. from_laneletをクリック
+3. to_laneletをクリック
+4. connection_typeを選択
+5. Enterで確定
+```
+
+connection_type：
+
+```text
+straight
+left
+right
+merge
+branch
+u_turn
+```
+
+Canvas上では矢印で表示する。
+
+```text
+from_lanelet centerline end → to_lanelet centerline start
+```
+
+---
+
+## 9.7 Route作成モード
+
+目的：走行するLanelet列を定義する。
+
+操作：
+
+```text
+1. Routeタブを選択
+2. 走行順にLaneletをクリック
+3. EnterでRoute確定
+```
+
+オプション：
+
+```text
+Use LaneConnection:
+  接続されていないLaneletの連続選択を警告する
+
+Auto route:
+  開始Laneletと終了Laneletを選択し、connection graphから最短経路を生成する
+```
+
+---
+
+## 9.8 Imageタブ
+
+目的：背景画像の読み込み、表示、座標合わせを行う。
+
+機能：
+
+```text
+Load Image
+Show / Hide
+Opacity
+Scale
+Rotate
+Translate
+Set Origin
+Set Resolution
+Two-point calibration
+Four-point homography calibration
+```
+
+初期実装では以下だけでよい。
+
+```text
+Load Image
+Opacity Slider
+Set pixel-to-meter scale
+Set origin
+Flip Y axis
+```
+
+---
+
+## 10. 背景画像機能
+
+## 10.1 要件
+
+背景画像を読み込み、地図要素の下に表示する。
+
+対応形式：
+
+```text
+png
+jpg
+jpeg
+bmp
+tiff
+```
+
+## 10.2 画像座標と地図座標
+
+画像はpixel座標、Vector Mapはmap座標で扱う。
+
+内部では以下の変換を持つ。
+
+```text
+map_x = image_x * resolution + origin_x
+map_y = -image_y * resolution + origin_y
+```
+
+または、より一般化して2D affine transformを使う。
+
+```text
+p_map = R * s * p_image + t
+```
+
+## 10.3 キャリブレーション方法
+
+### 最小版
+
+```text
+resolution [m/pixel]
+origin_x [m]
+origin_y [m]
+y_axis_flip [bool]
+```
+
+### 実用版
+
+既知の2点を使ったスケール・回転補正。
+
+```text
+1. 画像上の点Aをクリック
+2. 実座標Aを入力
+3. 画像上の点Bをクリック
+4. 実座標Bを入力
+5. scale, rotation, translationを計算
+```
+
+### 高度版
+
+4点対応によるHomography。
+
+航空写真や斜め画像を使う場合に有効。
+
+---
+
+## 11. 描画仕様
+
+## 11.1 色分け案
+
+| 要素              | 表示色       |
+| --------------- | --------- |
+| Point           | 白または黄色    |
+| White Line      | 白         |
+| Stop Line       | 赤         |
+| Crosswalk Line  | シアン       |
+| Lane Centerline | 青         |
+| Road Edge       | 緑         |
+| Virtual Line    | 紫の破線      |
+| Lanelet         | 半透明の塗りつぶし |
+| Connection      | オレンジ矢印    |
+| Route           | 太い黄色線     |
+
+## 11.2 線種
+
+| marking_type | 表示  |
+| ------------ | --- |
+| solid        | 実線  |
+| dashed       | 破線  |
+| double       | 二重線 |
+| virtual      | 点線  |
+
+## 11.3 選択状態
+
+選択中の要素は、太線・高輝度・ハンドル表示にする。
+
+```text
+Point selected:
+  点を大きく表示
+
+LineString selected:
+  線を太くし、構成Pointを表示
+
+Lanelet selected:
+  left/right/centerlineをまとめてハイライト
+
+Connection selected:
+  矢印を太く表示
+```
+
+---
+
+## 12. スナップ機能
+
+## 12.1 必須スナップ
+
+```text
+Snap to existing point
+Snap to line endpoint
+Snap to grid
+```
+
+## 12.2 追加スナップ
+
+```text
+Snap to nearest line
+Snap to line midpoint
+Snap to lanelet boundary
+Snap to centerline endpoint
+```
+
+## 12.3 実装方法
+
+Pointの最近傍探索にはKDTreeを使う。
+
+```python
+from scipy.spatial import KDTree
+```
+
+Lineへの最近傍はshapelyを使う。
+
+```python
+from shapely.geometry import LineString, Point
+```
+
+---
+
+## 13. Undo / Redo設計
+
+編集操作はCommand Patternで管理する。
+
+```text
+CreatePointCommand
+DeletePointCommand
+MovePointCommand
+CreateLineCommand
+DeleteLineCommand
+CreateLaneletCommand
+CreateConnectionCommand
+UpdatePropertyCommand
+```
+
+各Commandは以下を持つ。
+
+```python
+class Command:
+    def execute(self):
+        pass
+
+    def undo(self):
+        pass
+```
+
+Undo stack / Redo stackを管理する。
+
+---
+
+## 14. バリデーション
+
+保存前に地図の整合性をチェックする。
+
+## 14.1 Point
+
+```text
+id重複がない
+NaN座標がない
+```
+
+## 14.2 LineString
+
+```text
+point_idsが2点以上ある
+参照しているpoint_idが存在する
+line_typeとline_roleが矛盾しない
+```
+
+例：
+
+```text
+line_type = lane_centerline の場合、marking_type は virtual が望ましい
+line_role = lane_centerline の場合、is_observable は false が望ましい
+```
+
+## 14.3 Lanelet
+
+```text
+left_boundary_line_idが存在する
+right_boundary_line_idが存在する
+centerline_idが存在する
+left/right/centerlineが同一Lineではない
+```
+
+## 14.4 Connection
+
+```text
+from_lanelet_idが存在する
+to_lanelet_idが存在する
+from_lanelet_id != to_lanelet_id
+```
+
+## 14.5 Route
+
+```text
+route内のlanelet_idが存在する
+隣接するlanelet間にconnectionが存在するか確認する
+```
+
+---
+
+## 15. 内部状態管理
+
+アプリケーション全体では `MapDocument` を中心に管理する。
+
+```python
+class MapDocument:
+    vector_map: VectorMap
+    image_layer: Optional[ImageLayer]
+    selected_object: Optional[ObjectRef]
+    active_tool: BaseTool
+    undo_stack: list[Command]
+    redo_stack: list[Command]
+    dirty: bool
+```
+
+---
+
+## 16. Tool設計
+
+すべての編集ツールは共通インターフェースを持つ。
+
+```python
+class BaseTool:
+    def on_mouse_press(self, event):
+        pass
+
+    def on_mouse_move(self, event):
+        pass
+
+    def on_mouse_release(self, event):
+        pass
+
+    def on_key_press(self, event):
+        pass
+
+    def draw_preview(self, painter):
+        pass
+```
+
+各ツールは、現在の操作状態を内部に持つ。
+
+例：LineStringTool
+
+```python
+class LineStringTool(BaseTool):
+    current_point_ids: list[int]
+    preview_position: Optional[tuple[float, float]]
+    line_type: LineType
+    line_role: LineRole
+    marking_type: MarkingType
+```
+
+---
+
+## 17. MVP実装範囲
+
+最初の実装では、以下に絞る。
+
+```text
+背景画像読み込み
+ズーム・パン
+Point作成
+LineString作成
+LineString属性設定
+Lanelet作成
+LaneConnection作成
+YAML保存・読み込み
+Object Tree表示
+Property Panel編集
+```
+
+Undo/Redo、Route作成、自動centerline生成、Homography補正は第2段階でもよい。
+
+---
+
+## 18. 実装ステップ
+
+## Step 1: データモデル作成
+
+```text
+MapPoint
+MapLineString
+MapLanelet
+LaneConnection
+VectorMap
+YAML IO
+```
+
+## Step 2: 最小GUI
+
+```text
+MainWindow
+Canvas
+背景画像表示
+ズーム・パン
+```
+
+## Step 3: Point / LineString編集
+
+```text
+Point追加
+LineString作成
+LineString表示
+属性編集
+```
+
+## Step 4: Lanelet編集
+
+```text
+既存LineStringを選択してLanelet作成
+Laneletハイライト
+```
+
+## Step 5: Connection編集
+
+```text
+Lanelet間をクリックしてConnection作成
+矢印表示
+```
+
+## Step 6: 保存・読み込み
+
+```text
+YAML保存
+YAML読み込み
+バリデーション
+```
+
+## Step 7: 便利機能
+
+```text
+Undo/Redo
+スナップ
+Object Tree
+Layer Panel
+Route作成
+centerline自動生成
+画像座標キャリブレーション
+```
+
+---
+
+## 19. 画面上のタブ構成
+
+## 19.1 Selectタブ
+
+```text
+Mode: Select / Move / Delete
+Show point handles: on/off
+Selection filter:
+  Point
+  LineString
+  Lanelet
+  Connection
+```
+
+## 19.2 Pointタブ
+
+```text
+Create Point
+Snap:
+  grid
+  existing point
+  line endpoint
+```
+
+## 19.3 LineStringタブ
+
+```text
+Create LineString
+line_type dropdown
+line_role dropdown
+marking_type dropdown
+is_observable checkbox
+Finish button
+Cancel button
+```
+
+## 19.4 Laneletタブ
+
+```text
+Create Lanelet
+Select left boundary
+Select right boundary
+Select centerline
+Generate centerline button
+Finish button
+Cancel button
+```
+
+## 19.5 Connectionタブ
+
+```text
+Create Connection
+Select from lanelet
+Select to lanelet
+connection_type dropdown
+cost input
+Finish button
+Cancel button
+```
+
+## 19.6 Routeタブ
+
+```text
+Create Route
+route name
+selected lanelet sequence
+Auto route button
+Clear route button
+Finish button
+```
+
+## 19.7 Imageタブ
+
+```text
+Load Image
+Opacity slider
+Resolution input
+Origin X/Y input
+Rotation input
+Flip Y checkbox
+Set calibration points
+```
+
+---
+
+## 20. 背景画像に対する座標合わせ
+
+初期実装では、画像座標とmap座標を以下のように対応させる。
+
+```python
+class ImageTransform(BaseModel):
+    origin_x: float = 0.0
+    origin_y: float = 0.0
+    resolution: float = 0.05
+    rotation_rad: float = 0.0
+    flip_y: bool = True
+```
+
+変換：
+
+```python
+def image_to_map(u: float, v: float, tf: ImageTransform):
+    x = u * tf.resolution
+    y = -v * tf.resolution if tf.flip_y else v * tf.resolution
+
+    c = math.cos(tf.rotation_rad)
+    s = math.sin(tf.rotation_rad)
+
+    xr = c * x - s * y
+    yr = s * x + c * y
+
+    return xr + tf.origin_x, yr + tf.origin_y
+```
+
+---
+
+## 21. Vector Map推論への拡張を見据えた設計
+
+将来的にカメラ画像からVector Mapを推論する場合、以下の出力に対応できるとよい。
+
+```text
+Predicted points
+Predicted line strings
+Predicted lane centerlines
+Predicted lane graph
+Confidence score
+```
+
+そのため、静的mapだけでなく、推論結果にも同じ構造を使えるようにする。
+
+追加候補：
+
+```python
+class MapLineString(BaseModel):
+    confidence: Optional[float] = None
+```
+
+ただし、手作成の静的mapではconfidenceは不要なので、optionalにする。
+
+---
+
+## 22. 画像からの教師データ出力
+
+将来的に学習に使うなら、以下の出力機能を追加できる。
+
+```text
+BEV raster label export
+Polyline label export
+Lane graph label export
+COCO-like annotation export
+```
+
+### BEV raster label
+
+画像サイズと解像度を指定し、クラスごとのマスク画像を出力する。
+
+```text
+class 0: background
+class 1: white_line
+class 2: stop_line
+class 3: crosswalk_line
+class 4: lane_centerline
+class 5: road_edge
+```
+
+### Polyline label
+
+Vector Mapそのものを教師ラベルとして保存する。
+
+```json
+{
+  "lines": [
+    {
+      "id": 101,
+      "class": "white_line",
+      "points": [[0.0, 0.0], [1.0, 0.0]]
+    }
+  ]
+}
+```
+
+---
+
+## 23. コース画像を使った編集フロー例
+
+```text
+1. アプリを起動
+2. Imageタブからcourse_image.pngを読み込む
+3. 画像の解像度と原点を設定
+4. LineStringタブで外側白線をなぞる
+5. LineStringタブで内側白線をなぞる
+6. Lane Centerlineとして各レーン中央を作成
+7. Laneletタブでleft/right/centerlineを束ねる
+8. Connectionタブで分岐・合流を接続する
+9. Routeタブで走行順laneletを指定する
+10. YAMLとして保存する
+```
+
+---
+
+## 24. 実装時の注意点
+
+### 24.1 Pointの重複を避ける
+
+クリックごとに新規Pointを作ると、同じ位置に大量の点ができやすい。
+
+対策：
+
+```text
+既存Pointの近くをクリックしたらsnapして再利用
+```
+
+### 24.2 LineStringの向きを意識する
+
+Laneletのleft/right境界は進行方向に対して決まる。
+そのため、LineStringには向きがあると考える。
+
+対策：
+
+```text
+LineString作成時の点列順を保持
+Reverse Lineボタンを用意
+```
+
+### 24.3 Laneletのleft/right判定
+
+左境界と右境界を逆に設定すると、centerlineや接続が破綻する。
+
+対策：
+
+```text
+Lanelet作成時に左右を色分け表示
+left/rightを入れ替えるSwapボタンを用意
+```
+
+### 24.4 Centerlineと白線を混同しない
+
+centerlineは原則として仮想線であり、白線マッチングには直接使わない。
+
+対策：
+
+```text
+line_type = lane_centerline の場合、is_observable=falseをデフォルトにする
+marking_type = virtual をデフォルトにする
+```
+
+### 24.5 分岐部はLaneletを短く分割する
+
+分岐や合流を1つのLaneletに含めると接続関係が曖昧になる。
+
+対策：
+
+```text
+分岐点・合流点・交差点でLaneletを区切る
+```
+
+---
+
+## 25. 推奨ショートカット
+
+| キー     | 操作         |
+| ------ | ---------- |
+| V      | Select     |
+| P      | Point      |
+| L      | LineString |
+| N      | Lanelet    |
+| C      | Connection |
+| R      | Route      |
+| I      | Image      |
+| Enter  | 確定         |
+| Esc    | キャンセル      |
+| Delete | 削除         |
+| Ctrl+S | 保存         |
+| Ctrl+O | 開く         |
+| Ctrl+Z | Undo       |
+| Ctrl+Y | Redo       |
+| H      | 選択要素を非表示   |
+| F      | 選択要素へフォーカス |
+
+---
+
+## 26. 初期リリースのゴール
+
+初期リリースでは、以下ができれば十分である。
+
+```text
+背景画像を読み込める
+画像上に白線をLineStringとして作成できる
+centerlineを仮想LineStringとして作成できる
+Laneletとして線を束ねられる
+Lanelet間の接続を定義できる
+YAMLで保存・読み込みできる
+```
+
+この段階で、白線マッチング用の地図、経路追従用のcenterline、分岐判断用の接続情報を一通り作成できる。
+
+---
+
+## 27. 将来的な拡張
+
+```text
+Lanelet2 OSM export
+ROS msg export
+RViz Marker export
+BEV segmentation label export
+自動centerline生成
+白線検出結果からLineString半自動生成
+画像上でのHomography補正
+複数背景画像のタイル表示
+経路探索機能
+マッチングシミュレーション機能
+```
+
+特に、白線マッチングの実験まで考えるなら、将来的には以下があると便利。
+
+```text
+推定poseを入力して周辺LineStringだけを切り出す機能
+疑似カメラ視野内のmap要素を表示する機能
+LineStringを一定間隔でサンプリングして点群出力する機能
+semantic classごとの点群出力機能
+```
+
+---
+
+## 28. まとめ
+
+本ツールは、ROS非依存のPython GUIとして実装し、背景画像上でVector Mapを手作業で構築できるようにする。
+
+最小構成は以下である。
+
+```text
+Point
+LineString
+Lanelet
+LaneConnection
+Route
+```
+
+特に重要なのは、以下を明確に分けることである。
+
+```text
+白線・停止線・横断歩道線:
+  カメラで観測可能。白線マッチング用。
+
+lane centerline:
+  仮想線。経路追従・ルート管理用。
+
+lane connection:
+  分岐・合流のトポロジ管理用。
+```
+
+GUI操作としては、タブで作成対象を切り替え、左クリックで点・線・lanelet・connectionを作成する方式が直感的である。
+
+初期実装では、PySide6 + pyqtgraph + pydantic + PyYAML を中心に構成するのが最も現実的である。

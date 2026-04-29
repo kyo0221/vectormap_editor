@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="utf-8"?>
+<VectorMap map_id="course_001" map_version="0.1.0" frame_id="map">
+  <Points>
+    <Point id="1" x="0.0" y="0.0" z="0.0" />
+    <Point id="2" x="5.0" y="0.0" z="0.0" />
+    <Point id="3" x="0.0" y="2.0" z="0.0" />
+    <Point id="4" x="5.0" y="2.0" z="0.0" />
+  </Points>
+  <LineStrings>
+    <LineString id="101" name="left_boundary" line_type="white_line" line_role="left_boundary" marking_type="solid" is_observable="true">
+      <PointIds>
+        <PointRef id="1" />
+        <PointRef id="2" />
+      </PointIds>
+    </LineString>
+    <LineString id="102" name="right_boundary" line_type="white_line" line_role="right_boundary" marking_type="solid" is_observable="true">
+      <PointIds>
+        <PointRef id="3" />
+        <PointRef id="4" />
+      </PointIds>
+    </LineString>
+    <LineString id="201" name="centerline" line_type="lane_centerline" line_role="lane_centerline" marking_type="virtual" is_observable="false">
+      <PointIds>
+        <PointRef id="1" />
+        <PointRef id="2" />
+      </PointIds>
+    </LineString>
+  </LineStrings>
+  <Lanelets>
+    <Lanelet id="301" name="lane_001" left_boundary_line_id="101" right_boundary_line_id="102" centerline_id="201" is_virtual="false">
+      <AssociatedLineIds />
+    </Lanelet>
+  </Lanelets>
+  <Connections />
+  <Routes />
+</VectorMap>

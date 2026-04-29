@@ -1,0 +1,28 @@
+[project]
+name = "vector-map-editor"
+version = "0.1.0"
+description = "Lightweight vector map editor with XML persistence"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+  "PySide6>=6.6",
+  "pyqtgraph>=0.13",
+  "numpy>=1.26",
+  "opencv-python>=4.9",
+  "pydantic>=2.6",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.0",
+]
+
+[project.scripts]
+vector-map-editor = "vector_map_editor.main:main"
+
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["vector_map_editor*"]
