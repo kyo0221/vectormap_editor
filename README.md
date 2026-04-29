@@ -77,7 +77,7 @@ vector-map-editor
 #### 3. ラインストリング / エリアモード (キーボード: L)
 
 - 左パネルの **Class** で `Type` と `Subtype` を選択
-- `Type=LineString`: `solid`, `dashed`, `road_border`, `stop_line` を選択可能
+- `Type=LineString`: `solid`, `dashed`, `road_border`, `stop_line`, `virtual` を選択可能
 - `Type=Area`: `crosswalk` を選択可能
 - **左クリック**: 図形に点を追加
 - **右クリック** または **Enter**: 図形を確定
@@ -106,7 +106,7 @@ vector-map-editor
 
 ### Laneletを作成する
 
-Laneletは既存のLineString IDを参照して作成します。`Subtype` は `road`、`Turn` は `unknown`, `straight`, `left`, `right`, `merge`, `branch`, `u_turn` から選択できます。
+Laneletは既存のLineString IDを参照して作成します。`Subtype` は `road`, `intersection`、`Turn` は `unknown`, `straight`, `left`, `right`, `merge`, `branch`, `u_turn` から選択できます。白線がない仮想レーンでは **Virtual lanelet** をONにします。
 
 **手順:**
 
@@ -194,14 +194,17 @@ Laneletは既存のLineString IDを参照して作成します。`Subtype` は `
   <way id="101" visible="true" version="1">
     <nd ref="1" />
     <nd ref="2" />
-    <tag k="type" v="LineString" />
+    <tag k="type" v="line_thin" />
     <tag k="subtype" v="solid" />
+    <tag k="marking_type" v="solid" />
+    <tag k="is_observable" v="true" />
   </way>
   <relation id="301" visible="true" version="1">
     <member type="way" ref="101" role="left" />
     <member type="way" ref="102" role="right" />
     <tag k="subtype" v="road" />
     <tag k="type" v="lanelet" />
+    <tag k="is_virtual" v="false" />
     <tag k="turn_direction" v="left" />
   </relation>
 </osm>
@@ -209,9 +212,9 @@ Laneletは既存のLineString IDを参照して作成します。`Subtype` は `
 
 ### 列挙値
 
-**LineString subtype**: solid=実線、dashed=破線、road_border=道路境界、stop_line=停止線
+**LineString subtype**: solid=実線、dashed=破線、road_border=道路境界、stop_line=停止線、virtual=仮想線
 
-**Lanelet subtype**: road=道路
+**Lanelet subtype**: road=通常道路、intersection=交差点/分岐合流部
 
 **Area subtype**: crosswalk=横断歩道
 

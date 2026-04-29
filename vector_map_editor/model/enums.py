@@ -23,10 +23,12 @@ class LineStringSubtype(str, Enum):
     DASHED = "dashed"
     ROAD_BORDER = "road_border"
     STOP_LINE = "stop_line"
+    VIRTUAL = "virtual"
 
 
 class LaneletSubtype(str, Enum):
     ROAD = "road"
+    INTERSECTION = "intersection"
 
 
 class AreaSubtype(str, Enum):

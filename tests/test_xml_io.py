@@ -3,7 +3,7 @@ from pathlib import Path
 import pytest
 
 from vector_map_editor.model.coordinates import local_meter_to_pixel, pixel_to_local_meter
-from vector_map_editor.model.enums import ConnectionType, LineRole, LineStringSubtype, LineType, MarkingType
+from vector_map_editor.model.enums import ConnectionType, LaneletSubtype, LineRole, LineStringSubtype, LineType, MarkingType
 from vector_map_editor.model.geometry import infer_centerline_points, resample_polyline
 from vector_map_editor.model.map_data import LaneConnection, MapArea, MapLanelet, MapLineString, MapPoint, VectorMap
 from vector_map_editor.io.xml_io import load_map_xml, save_map_xml
@@ -56,9 +56,11 @@ def test_save_load_roundtrip(tmp_path: Path) -> None:
     vm.lanelets.append(
         MapLanelet(
             id=302,
+            subtype=LaneletSubtype.INTERSECTION,
             left_boundary_line_id=101,
             right_boundary_line_id=102,
             centerline_id=201,
+            is_virtual=True,
             turn_direction=ConnectionType.RIGHT,
         )
     )
@@ -78,9 +80,14 @@ def test_save_load_roundtrip(tmp_path: Path) -> None:
     text = output.read_text()
     assert "<osm" in text
     assert 'k="type" v="line_thin"' in text
-    assert 'k="type" v="virtual"' in text
-    assert 'k="line_role" v="left_boundary"' in text
+    assert 'k="type" v="virtual_line"' in text
+    assert 'k="subtype" v="virtual"' in text
+    assert 'k="line_role"' not in text
+    assert 'k="line_type"' not in text
+    assert 'k="route_role"' not in text
     assert 'v="lanelet"' in text
+    assert 'k="subtype" v="intersection"' in text
+    assert 'k="is_virtual" v="true"' in text
     assert 'k="turn_direction" v="left"' in text
     assert 'v="lane_connection"' in text
     assert 'v="area"' in text
@@ -94,6 +101,8 @@ def test_save_load_roundtrip(tmp_path: Path) -> None:
     assert len(restored.areas) == 1
     assert len(restored.connections) == 1
     assert restored.lanelets[0].turn_direction == ConnectionType.LEFT
+    assert restored.lanelets[1].subtype == LaneletSubtype.INTERSECTION
+    assert restored.lanelets[1].is_virtual is True
     assert restored.lines[0].line_role == LineRole.LEFT_BOUNDARY
     assert restored.lines[2].line_role == LineRole.LANE_CENTERLINE
 
@@ -118,19 +127,22 @@ def test_load_lanelet2_way_types(tmp_path: Path) -> None:
   <way id="102">
     <nd ref="3" />
     <nd ref="4" />
-    <tag k="type" v="road_border" />
+    <tag k="type" v="line_thin" />
+    <tag k="subtype" v="road_border" />
   </way>
   <way id="103">
     <nd ref="5" />
     <nd ref="6" />
-    <tag k="type" v="virtual" />
+    <tag k="type" v="virtual_line" />
+    <tag k="subtype" v="virtual" />
   </way>
   <relation id="301">
     <member type="way" ref="101" role="left" />
     <member type="way" ref="102" role="right" />
     <member type="way" ref="103" role="centerline" />
     <tag k="type" v="lanelet" />
-    <tag k="subtype" v="road" />
+    <tag k="subtype" v="intersection" />
+    <tag k="is_virtual" v="true" />
   </relation>
 </osm>
 """,
@@ -143,7 +155,10 @@ def test_load_lanelet2_way_types(tmp_path: Path) -> None:
     assert restored.lines[0].subtype == LineStringSubtype.SOLID
     assert restored.lines[1].line_type == LineType.ROAD_EDGE
     assert restored.lines[2].line_role == LineRole.LANE_CENTERLINE
+    assert restored.lines[2].subtype == LineStringSubtype.VIRTUAL
     assert restored.lanelets[0].centerline_id == 103
+    assert restored.lanelets[0].subtype == LaneletSubtype.INTERSECTION
+    assert restored.lanelets[0].is_virtual is True
 
 
 def test_pixel_local_meter_roundtrip() -> None:

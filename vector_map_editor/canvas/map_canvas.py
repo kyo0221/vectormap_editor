@@ -445,7 +445,7 @@ class MapCanvas(pg.PlotWidget):
 
         line = MapLineString(
             id=self._next_line_id,
-            subtype=LineStringSubtype.DASHED,
+            subtype=LineStringSubtype.VIRTUAL,
             line_type=LineType.LANE_CENTERLINE,
             line_role=LineRole.LANE_CENTERLINE,
             marking_type=MarkingType.VIRTUAL,
@@ -738,6 +738,10 @@ class MapCanvas(pg.PlotWidget):
             line.line_type = LineType.STOP_LINE
             line.line_role = LineRole.STOP_LINE
             line.marking_type = MarkingType.SOLID
+        elif line.subtype == LineStringSubtype.VIRTUAL:
+            line.line_type = LineType.VIRTUAL_LINE
+            line.marking_type = MarkingType.VIRTUAL
+            line.is_observable = False
         elif line.subtype == LineStringSubtype.DASHED:
             line.line_type = LineType.WHITE_LINE
             line.marking_type = MarkingType.DASHED
@@ -750,7 +754,11 @@ class MapCanvas(pg.PlotWidget):
         style = Qt.SolidLine
         if line.subtype == LineStringSubtype.DASHED or line.marking_type == MarkingType.DASHED:
             style = Qt.DashLine
-        if line.line_role == LineRole.LANE_CENTERLINE or line.line_type == LineType.LANE_CENTERLINE:
+        if (
+            line.line_role == LineRole.LANE_CENTERLINE
+            or line.line_type == LineType.LANE_CENTERLINE
+            or line.subtype == LineStringSubtype.VIRTUAL
+        ):
             return pg.mkPen((100, 220, 255), width=2, style=Qt.DashLine)
         if line.subtype == LineStringSubtype.ROAD_BORDER or line.line_type == LineType.ROAD_EDGE:
             return pg.mkPen((80, 220, 160), width=2, style=style)

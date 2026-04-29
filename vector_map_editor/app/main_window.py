@@ -118,6 +118,7 @@ class MainWindow(QMainWindow):
         self.lanelet_center = QLineEdit()
         self.lanelet_auto_center = QCheckBox("Auto centerline")
         self.lanelet_auto_center.setChecked(True)
+        self.lanelet_is_virtual = QCheckBox("Virtual lanelet")
         btn_lanelet = QPushButton("Create Lanelet")
         btn_lanelet.clicked.connect(self._create_lanelet)
 
@@ -125,6 +126,7 @@ class MainWindow(QMainWindow):
         lanelet_layout.addRow("Right line ID", self._line_pick_row(self.lanelet_right, "lanelet_right"))
         lanelet_layout.addRow("Centerline ID", self._line_pick_row(self.lanelet_center, "lanelet_center"))
         lanelet_layout.addRow(self.lanelet_auto_center)
+        lanelet_layout.addRow(self.lanelet_is_virtual)
         lanelet_layout.addRow(btn_lanelet)
 
         conn_box = QGroupBox("Connection")
@@ -405,6 +407,7 @@ class MainWindow(QMainWindow):
                 left_boundary_line_id=left_id,
                 right_boundary_line_id=right_id,
                 centerline_id=center_id,
+                is_virtual=self.lanelet_is_virtual.isChecked(),
                 turn_direction=turn_direction,
             )
             self.canvas.vector_map.lanelets.append(lanelet)
