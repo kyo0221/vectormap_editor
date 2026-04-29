@@ -77,6 +77,9 @@ def test_save_load_roundtrip(tmp_path: Path) -> None:
 
     text = output.read_text()
     assert "<osm" in text
+    assert 'k="type" v="line_thin"' in text
+    assert 'k="type" v="virtual"' in text
+    assert 'k="line_role" v="left_boundary"' in text
     assert 'v="lanelet"' in text
     assert 'k="turn_direction" v="left"' in text
     assert 'v="lane_connection"' in text
@@ -91,6 +94,56 @@ def test_save_load_roundtrip(tmp_path: Path) -> None:
     assert len(restored.areas) == 1
     assert len(restored.connections) == 1
     assert restored.lanelets[0].turn_direction == ConnectionType.LEFT
+    assert restored.lines[0].line_role == LineRole.LEFT_BOUNDARY
+    assert restored.lines[2].line_role == LineRole.LANE_CENTERLINE
+
+
+def test_load_lanelet2_way_types(tmp_path: Path) -> None:
+    path = tmp_path / "lanelet2.osm"
+    path.write_text(
+        """<?xml version="1.0" encoding="utf-8"?>
+<osm version="0.6">
+  <node id="1" x="0" y="0" z="0" />
+  <node id="2" x="10" y="0" z="0" />
+  <node id="3" x="0" y="4" z="0" />
+  <node id="4" x="10" y="4" z="0" />
+  <node id="5" x="0" y="2" z="0" />
+  <node id="6" x="10" y="2" z="0" />
+  <way id="101">
+    <nd ref="1" />
+    <nd ref="2" />
+    <tag k="type" v="line_thin" />
+    <tag k="subtype" v="solid" />
+  </way>
+  <way id="102">
+    <nd ref="3" />
+    <nd ref="4" />
+    <tag k="type" v="road_border" />
+  </way>
+  <way id="103">
+    <nd ref="5" />
+    <nd ref="6" />
+    <tag k="type" v="virtual" />
+  </way>
+  <relation id="301">
+    <member type="way" ref="101" role="left" />
+    <member type="way" ref="102" role="right" />
+    <member type="way" ref="103" role="centerline" />
+    <tag k="type" v="lanelet" />
+    <tag k="subtype" v="road" />
+  </relation>
+</osm>
+""",
+        encoding="utf-8",
+    )
+
+    restored = load_map_xml(path)
+
+    assert len(restored.lines) == 3
+    assert restored.lines[0].subtype == LineStringSubtype.SOLID
+    assert restored.lines[1].line_type == LineType.ROAD_EDGE
+    assert restored.lines[2].line_role == LineRole.LANE_CENTERLINE
+    assert restored.lanelets[0].centerline_id == 103
 
 
 def test_pixel_local_meter_roundtrip() -> None:
