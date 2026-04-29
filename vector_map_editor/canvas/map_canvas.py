@@ -39,8 +39,8 @@ class MapCanvas(pg.PlotWidget):
 
         self.setBackground("k")
         self.showGrid(x=True, y=True, alpha=0.2)
-        # Do not rely on a global invert; we'll set the view range when an image is loaded
-        self.setAspectLocked(False)
+        # Keep x/y display resolution equal so background images are not distorted.
+        self.setAspectLocked(True, ratio=1.0)
 
         self._background_item = pg.ImageItem(axisOrder="row-major")
         self.addItem(self._background_item)
@@ -123,6 +123,8 @@ class MapCanvas(pg.PlotWidget):
         self._background_item.setRect(pg.QtCore.QRectF(0, 0, w, h))
 
         vb = self.getPlotItem().vb
+        # Keep one canvas x-unit equal to one canvas y-unit on screen.
+        vb.setAspectLocked(True, ratio=1.0)
         # Ensure y increases downward like image coordinates by inverting the viewbox Y
         vb.invertY(True)
         # Fix the visible range to image pixel extents (no padding)
