@@ -10,7 +10,7 @@
 - Lanelet作成 (既存ラインIDから参照)
 - Lanelet接続作成
 - hoverによるLineString / Lanelet のID・subtype等の表示
-- pixel座標からlocal meter座標への変換
+- pixel座標からENU meter座標への変換
 - `.osm`拡張子のOSM XML形式で保存・読み込み
 
 ## インストール
@@ -99,9 +99,9 @@ vector-map-editor
 
 ### 座標系
 
-キャンバス上のクリック位置は背景画像のpixel座標として取得され、内部データと保存ファイルではlocal meter座標として管理されます。local座標の原点は画像原点です。
+キャンバス上のクリック位置は背景画像のpixel座標として取得され、内部データと保存ファイルではENU meter座標として管理されます。ENU座標の原点は `scripts/checker.py` と同じ変換式に基づきます。
 
-local座標はRViz向けに、画像右方向をX正、画像上方向をY正として保存します。画像のpixel比率を保つため、pixel→meter変換は一様スケール `PIXELS_PER_METER` を使用します。
+ENU座標はRViz向けに、eastをX、northをYとして保存します。pixel→ENU変換には5点フィット済みの2Dアフィン変換を使用し、距離計算や3m間隔の再サンプルもENUメートル単位で行います。
 
 ### Laneletを作成する
 

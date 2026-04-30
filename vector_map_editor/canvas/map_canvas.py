@@ -7,7 +7,7 @@ import pyqtgraph as pg
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QKeySequence, QMouseEvent
 
-from vector_map_editor.model.coordinates import local_meter_to_pixel, pixel_to_local_meter
+from vector_map_editor.model.coordinates import enu_to_pixel, pixel_to_enu
 from vector_map_editor.model.enums import (
     AreaSubtype,
     FeatureType,
@@ -172,7 +172,7 @@ class MapCanvas(pg.PlotWidget):
                 x_pixel = max(0.0, min(x_pixel, float(w - 1)))
                 y_pixel = max(0.0, min(y_pixel, float(h - 1)))
 
-            x_m, y_m = pixel_to_local_meter(x_pixel, y_pixel)
+            east_m, north_m = pixel_to_enu(x_pixel, y_pixel)
             if self.mode == "line" and self.assist_enabled and self.current_line_point_ids:
                 try:
                     self._add_assisted_segment(x_pixel, y_pixel)
@@ -192,9 +192,9 @@ class MapCanvas(pg.PlotWidget):
                     return
                 x_pixel = float(snapped_x)
                 y_pixel = float(snapped_y)
-                x_m, y_m = pixel_to_local_meter(x_pixel, y_pixel)
+                east_m, north_m = pixel_to_enu(x_pixel, y_pixel)
 
-            pid = self._add_point(x_m, y_m)
+            pid = self._add_point(east_m, north_m)
 
             if self.mode == "line":
                 self.current_line_point_ids.append(pid)
@@ -208,7 +208,7 @@ class MapCanvas(pg.PlotWidget):
             # show created point id and pixel coordinates
             self.on_status(
                 f"Point added: {pid} pixel=({int(x_pixel)},{int(y_pixel)}) "
-                f"local=({x_m:.3f},{y_m:.3f}) m"
+                f"ENU=({east_m:.3f},{north_m:.3f}) m"
             )
             ev.accept()
             return
@@ -440,13 +440,13 @@ class MapCanvas(pg.PlotWidget):
         if left_line is None or right_line is None:
             raise RuntimeError(f"Lanelet {lanelet_id} requires valid left and right LineStrings")
 
-        left_points = self._line_local_points(left_line)
-        right_points = self._line_local_points(right_line)
+        left_points = self._line_enu_points(left_line)
+        right_points = self._line_enu_points(right_line)
         center_points = infer_centerline_points(left_points, right_points, spacing_m)
 
         point_ids: list[int] = []
-        for x_m, y_m in center_points:
-            point_ids.append(self._add_point(x_m, y_m))
+        for east_m, north_m in center_points:
+            point_ids.append(self._add_point(east_m, north_m))
 
         line = MapLineString(
             id=self._next_line_id,
@@ -487,18 +487,18 @@ class MapCanvas(pg.PlotWidget):
         if previous_point is None:
             raise RuntimeError("Current LineString references an unknown point")
 
-        start_pixel = local_meter_to_pixel(previous_point.x, previous_point.y)
+        start_pixel = enu_to_pixel(previous_point.x, previous_point.y)
         if self._white_mask is None:
             raise RuntimeError("Assist requires a loaded binary image")
         pixel_path = trace_white_pixel_path(self._white_mask, start_pixel, (x_pixel, y_pixel))
-        local_path = [pixel_to_local_meter(float(px), float(py)) for px, py in pixel_path]
-        local_samples = resample_polyline(local_path, self.assist_spacing_m)
-        if len(local_samples) < 2:
+        enu_path = [pixel_to_enu(float(px), float(py)) for px, py in pixel_path]
+        enu_samples = resample_polyline(enu_path, self.assist_spacing_m)
+        if len(enu_samples) < 2:
             raise RuntimeError("Assisted segment is too short to add points")
 
         new_point_ids: list[int] = []
-        for x_m, y_m in local_samples[1:]:
-            point_id = self._add_point(x_m, y_m)
+        for east_m, north_m in enu_samples[1:]:
+            point_id = self._add_point(east_m, north_m)
             self.current_line_point_ids.append(point_id)
             new_point_ids.append(point_id)
 
@@ -642,7 +642,7 @@ class MapCanvas(pg.PlotWidget):
             self._lanelet_items.append(item)
 
     def _point_to_pixel(self, point: MapPoint) -> tuple[float, float]:
-        return local_meter_to_pixel(point.x, point.y)
+        return enu_to_pixel(point.x, point.y)
 
     def _line_by_id(self, line_id: int | None) -> MapLineString | None:
         if line_id is None:
@@ -672,7 +672,7 @@ class MapCanvas(pg.PlotWidget):
             centerline.marking_type = MarkingType.VIRTUAL
             centerline.is_observable = False
 
-    def _line_local_points(self, line: MapLineString) -> list[tuple[float, float]]:
+    def _line_enu_points(self, line: MapLineString) -> list[tuple[float, float]]:
         points = [self._point_by_id(pid) for pid in line.point_ids]
         if any(point is None for point in points):
             raise RuntimeError(f"LineString {line.id} references unknown points")
@@ -721,7 +721,7 @@ class MapCanvas(pg.PlotWidget):
             return False
 
         if target in {"lanelet_left", "lanelet_right", "lanelet_center", "resample_line"}:
-            line_id = self._nearest_line_id(x_pixel, y_pixel, threshold_pixel=12.0)
+            line_id = self._nearest_line_id(x_pixel, y_pixel, threshold_m=2.0)
             if line_id is None:
                 self.on_status("No LineString near click")
                 return True
@@ -794,14 +794,14 @@ class MapCanvas(pg.PlotWidget):
         if any(point is None for point in old_points):
             raise RuntimeError(f"LineString {line_id} references unknown points")
 
-        local_points = [(point.x, point.y) for point in old_points if point is not None]
-        resampled = resample_polyline(local_points, spacing_m)
+        enu_points = [(point.x, point.y) for point in old_points if point is not None]
+        resampled = resample_polyline(enu_points, spacing_m)
         if len(resampled) < 2:
             raise RuntimeError(f"LineString {line_id} is too short to resample")
 
         new_point_ids: list[int] = []
-        for x_m, y_m in resampled:
-            new_point_ids.append(self._add_point(x_m, y_m))
+        for east_m, north_m in resampled:
+            new_point_ids.append(self._add_point(east_m, north_m))
 
         line.point_ids = new_point_ids
         removed_points: list[MapPoint] = []
@@ -836,7 +836,7 @@ class MapCanvas(pg.PlotWidget):
         ]
         labels.extend(self._area_hover_text(area) for area in areas)
 
-        nearest_line_id = self._nearest_line_id(x_pixel, y_pixel, threshold_pixel=8.0)
+        nearest_line_id = self._nearest_line_id(x_pixel, y_pixel, threshold_m=1.4)
         if nearest_line_id is not None:
             line = self._line_by_id(nearest_line_id)
             if line is not None:
@@ -882,13 +882,14 @@ class MapCanvas(pg.PlotWidget):
     def _area_hover_text(area: MapArea) -> str:
         return f"Area ID: {area.id} subtype={area.subtype.value} outer={area.outer_line_id}"
 
-    def _nearest_line_id(self, x_pixel: float, y_pixel: float, threshold_pixel: float) -> int | None:
+    def _nearest_line_id(self, x_pixel: float, y_pixel: float, threshold_m: float) -> int | None:
         nearest_id: int | None = None
-        nearest_distance = threshold_pixel
+        nearest_distance = threshold_m
+        point_enu = pixel_to_enu(x_pixel, y_pixel)
         for line in self.vector_map.lines:
-            pixels = self._line_pixel_points(line)
-            for p1, p2 in zip(pixels, pixels[1:]):
-                distance = self._distance_to_segment((x_pixel, y_pixel), p1, p2)
+            points_enu = self._line_enu_points(line)
+            for p1, p2 in zip(points_enu, points_enu[1:]):
+                distance = self._distance_to_segment(point_enu, p1, p2)
                 if distance <= nearest_distance:
                     nearest_distance = distance
                     nearest_id = line.id

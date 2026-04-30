@@ -2,7 +2,7 @@ from pathlib import Path
 
 import pytest
 
-from vector_map_editor.model.coordinates import PIXELS_PER_METER, local_meter_to_pixel, pixel_to_local_meter
+from vector_map_editor.model.coordinates import enu_to_pixel, pixel_to_enu
 from vector_map_editor.model.enums import ConnectionType, LaneletSubtype, LineRole, LineStringSubtype, LineType, MarkingType
 from vector_map_editor.model.geometry import infer_centerline_points, resample_polyline
 from vector_map_editor.model.map_data import LaneConnection, MapArea, MapLanelet, MapLineString, MapPoint, VectorMap
@@ -170,15 +170,15 @@ def test_load_lanelet2_way_types(tmp_path: Path) -> None:
     assert restored.lanelets[0].is_virtual is True
 
 
-def test_pixel_local_meter_roundtrip() -> None:
+def test_pixel_enu_roundtrip() -> None:
     x_pixel, y_pixel = 320.0, 240.0
-    x_m, y_m = pixel_to_local_meter(x_pixel, y_pixel)
-    restored_x_pixel, restored_y_pixel = local_meter_to_pixel(x_m, y_m)
+    east_m, north_m = pixel_to_enu(x_pixel, y_pixel)
+    restored_x_pixel, restored_y_pixel = enu_to_pixel(east_m, north_m)
 
     assert restored_x_pixel == pytest.approx(x_pixel)
     assert restored_y_pixel == pytest.approx(y_pixel)
-    assert pixel_to_local_meter(0.0, PIXELS_PER_METER) == pytest.approx((0.0, -1.0))
-    assert local_meter_to_pixel(0.0, 1.0) == pytest.approx((0.0, -PIXELS_PER_METER))
+    assert pixel_to_enu(532.0, 328.0) == pytest.approx((-0.012410176975961917, -0.4534401517148865))
+    assert enu_to_pixel(-0.012410176975961917, -0.4534401517148865) == pytest.approx((532.0, 328.0))
 
 
 def test_resample_polyline_uses_three_meter_spacing() -> None:
