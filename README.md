@@ -1,6 +1,4 @@
-# ベクターマップエディタ (OSM XML形式)
-
-計画書に基づいた軽量なベクターマップエディタです。
+# Vector map editor (OSM XML形式)
 
 ## 実装機能
 
@@ -11,7 +9,7 @@
 - エリア作成
 - Lanelet作成 (既存ラインIDから参照)
 - Lanelet接続作成
-- hoverによるLineString ID / Lanelet IDの表示
+- hoverによるLineString / Lanelet のID・subtype等の表示
 - pixel座標からlocal meter座標への変換
 - `.osm`拡張子のOSM XML形式で保存・読み込み
 
@@ -76,11 +74,12 @@ vector-map-editor
 
 #### 3. ラインストリング / エリアモード (キーボード: L)
 
-- 左パネルの **Class** で `Type` と `Subtype` を選択
-- `Type=LineString`: `solid`, `dashed`, `road_border`, `stop_line` を選択可能
-- `Type=Area`: `crosswalk` を選択可能
+- 左パネルの **Class** で `Type` を選択
 - **左クリック**: 図形に点を追加
-- **右クリック** または **Enter**: 図形を確定
+- **右クリック** または **Enter**: subtypeを選択して図形を確定
+- `Type=LineString`: `solid`, `dashed`, `road_border`, `stop_line`, `virtual_line` を選択可能
+- LineStringのOSM `type` はsubtypeに応じて `lane_thin`, `virtual_line`, `stop_line` のいずれかに自動設定されます
+- `Type=Area`: `crosswalk` を選択可能
 - **Esc**: ラインの作成をキャンセル (追加済みの点は削除されます)
 - **最小要件**: 有効なLineString/Areaには2点以上必要
 
@@ -102,11 +101,11 @@ vector-map-editor
 
 キャンバス上のクリック位置は背景画像のpixel座標として取得され、内部データと保存ファイルではlocal meter座標として管理されます。local座標の原点は画像原点です。
 
-変換には、提供されたECEF→pixel変換式の線形部分を逆変換したものを使用します。
+local座標はRViz向けに、画像右方向をX正、画像上方向をY正として保存します。画像のpixel比率を保つため、pixel→meter変換は一様スケール `PIXELS_PER_METER` を使用します。
 
 ### Laneletを作成する
 
-Laneletは既存のLineString IDを参照して作成します。`Subtype` は `road`、`Turn` は `unknown`, `straight`, `left`, `right`, `merge`, `branch`, `u_turn` から選択できます。
+Laneletは既存のLineString IDを参照して作成します。**Create Lanelet** を押したタイミングで `road`, `intersection` からsubtypeを選択します。白線がない仮想レーンでは **Virtual lanelet** をONにします。
 
 **手順:**
 
@@ -124,7 +123,7 @@ Laneletは既存のLineString IDを参照して作成します。`Subtype` は `
    - 右側のラインID
    - 中心線ID
 
-5. **Create Lanelet** ボタンをクリック
+5. **Create Lanelet** ボタンをクリックし、subtypeを選択
 
 ### Lanelet接続を作成する
 
@@ -194,24 +193,26 @@ Laneletは既存のLineString IDを参照して作成します。`Subtype` は `
   <way id="101" visible="true" version="1">
     <nd ref="1" />
     <nd ref="2" />
-    <tag k="type" v="LineString" />
+    <tag k="type" v="line_thin" />
     <tag k="subtype" v="solid" />
+    <tag k="marking_type" v="solid" />
+    <tag k="is_observable" v="true" />
   </way>
   <relation id="301" visible="true" version="1">
     <member type="way" ref="101" role="left" />
     <member type="way" ref="102" role="right" />
     <tag k="subtype" v="road" />
     <tag k="type" v="lanelet" />
-    <tag k="turn_direction" v="left" />
+    <tag k="is_virtual" v="false" />
   </relation>
 </osm>
 ```
 
 ### 列挙値
 
-**LineString subtype**: solid=実線、dashed=破線、road_border=道路境界、stop_line=停止線
+**LineString subtype**: solid=実線、dashed=破線、road_border=道路境界、stop_line=停止線、virtual_line=仮想線
 
-**Lanelet subtype**: road=道路
+**Lanelet subtype**: road=通常道路、intersection=交差点/分岐合流部
 
 **Area subtype**: crosswalk=横断歩道
 
@@ -226,10 +227,10 @@ Laneletは既存のLineString IDを参照して作成します。`Subtype` は `
    - 透明度を調整して詳細を確認
 
 2. **左側の境界線を作成**
-   - Classで `Type=LineString`, `Subtype=solid` などを選択
+   - Classで `Type=LineString` を選択
    - **L** キーを押す
    - 左側の端に沿って点をクリック
-   - **Enter** を押して確定
+   - **Enter** を押し、`solid` などのsubtypeを選択して確定
    - ラインID (例: 101) をメモ
 
 3. **右側の境界線を作成**
@@ -247,8 +248,7 @@ Laneletは既存のLineString IDを参照して作成します。`Subtype` は `
 5. **Laneletを作成**
    - 左パネルの「Lanelet」セクションに移動
    - 入力: 左=101、右=102、中心=201
-   - 交差点では `Turn=left` などを選択
-   - **Create Lanelet** をクリック
+   - **Create Lanelet** をクリックし、`road` または `intersection` を選択
    - Lanelet ID: 301
 
 6. **地図を保存**
