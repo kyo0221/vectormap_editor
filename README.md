@@ -1,6 +1,4 @@
-# ベクターマップエディタ (OSM XML形式)
-
-計画書に基づいた軽量なベクターマップエディタです。
+# Vector map editor (OSM XML形式)
 
 ## 実装機能
 
@@ -11,7 +9,7 @@
 - エリア作成
 - Lanelet作成 (既存ラインIDから参照)
 - Lanelet接続作成
-- hoverによるLineString ID / Lanelet IDの表示
+- hoverによるLineString / Lanelet のID・subtype等の表示
 - pixel座標からlocal meter座標への変換
 - `.osm`拡張子のOSM XML形式で保存・読み込み
 
@@ -76,11 +74,12 @@ vector-map-editor
 
 #### 3. ラインストリング / エリアモード (キーボード: L)
 
-- 左パネルの **Class** で `Type` と `Subtype` を選択
-- `Type=LineString`: `solid`, `dashed`, `road_border`, `stop_line`, `virtual` を選択可能
-- `Type=Area`: `crosswalk` を選択可能
+- 左パネルの **Class** で `Type` を選択
 - **左クリック**: 図形に点を追加
-- **右クリック** または **Enter**: 図形を確定
+- **右クリック** または **Enter**: subtypeを選択して図形を確定
+- `Type=LineString`: `solid`, `dashed`, `road_border`, `stop_line`, `virtual_line` を選択可能
+- LineStringのOSM `type` はsubtypeに応じて `lane_thin`, `virtual_line`, `stop_line` のいずれかに自動設定されます
+- `Type=Area`: `crosswalk` を選択可能
 - **Esc**: ラインの作成をキャンセル (追加済みの点は削除されます)
 - **最小要件**: 有効なLineString/Areaには2点以上必要
 
@@ -106,7 +105,7 @@ vector-map-editor
 
 ### Laneletを作成する
 
-Laneletは既存のLineString IDを参照して作成します。`Subtype` は `road`, `intersection`、`Turn` は `unknown`, `straight`, `left`, `right`, `merge`, `branch`, `u_turn` から選択できます。白線がない仮想レーンでは **Virtual lanelet** をONにします。
+Laneletは既存のLineString IDを参照して作成します。**Create Lanelet** を押したタイミングで `road`, `intersection` からsubtypeを選択します。白線がない仮想レーンでは **Virtual lanelet** をONにします。
 
 **手順:**
 
@@ -124,7 +123,7 @@ Laneletは既存のLineString IDを参照して作成します。`Subtype` は `
    - 右側のラインID
    - 中心線ID
 
-5. **Create Lanelet** ボタンをクリック
+5. **Create Lanelet** ボタンをクリックし、subtypeを選択
 
 ### Lanelet接続を作成する
 
@@ -205,14 +204,13 @@ Laneletは既存のLineString IDを参照して作成します。`Subtype` は `
     <tag k="subtype" v="road" />
     <tag k="type" v="lanelet" />
     <tag k="is_virtual" v="false" />
-    <tag k="turn_direction" v="left" />
   </relation>
 </osm>
 ```
 
 ### 列挙値
 
-**LineString subtype**: solid=実線、dashed=破線、road_border=道路境界、stop_line=停止線、virtual=仮想線
+**LineString subtype**: solid=実線、dashed=破線、road_border=道路境界、stop_line=停止線、virtual_line=仮想線
 
 **Lanelet subtype**: road=通常道路、intersection=交差点/分岐合流部
 
@@ -229,10 +227,10 @@ Laneletは既存のLineString IDを参照して作成します。`Subtype` は `
    - 透明度を調整して詳細を確認
 
 2. **左側の境界線を作成**
-   - Classで `Type=LineString`, `Subtype=solid` などを選択
+   - Classで `Type=LineString` を選択
    - **L** キーを押す
    - 左側の端に沿って点をクリック
-   - **Enter** を押して確定
+   - **Enter** を押し、`solid` などのsubtypeを選択して確定
    - ラインID (例: 101) をメモ
 
 3. **右側の境界線を作成**
@@ -250,8 +248,7 @@ Laneletは既存のLineString IDを参照して作成します。`Subtype` は `
 5. **Laneletを作成**
    - 左パネルの「Lanelet」セクションに移動
    - 入力: 左=101、右=102、中心=201
-   - 交差点では `Turn=left` などを選択
-   - **Create Lanelet** をクリック
+   - **Create Lanelet** をクリックし、`road` または `intersection` を選択
    - Lanelet ID: 301
 
 6. **地図を保存**

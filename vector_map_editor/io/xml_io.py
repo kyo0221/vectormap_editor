@@ -30,6 +30,8 @@ def _text(value: object) -> str:
 
 
 def _lanelet2_way_type(line: MapLineString) -> str:
+    if line.subtype == LineStringSubtype.STOP_LINE or line.line_type == LineType.STOP_LINE:
+        return "stop_line"
     if (
         line.line_type in {LineType.LANE_CENTERLINE, LineType.VIRTUAL_LINE}
         or line.line_role in {LineRole.LANE_CENTERLINE, LineRole.VIRTUAL_BOUNDARY}
@@ -57,6 +59,12 @@ def _lanelet2_marking_type(line: MapLineString) -> str:
     if line.subtype == LineStringSubtype.VIRTUAL or line.line_type == LineType.LANE_CENTERLINE:
         return MarkingType.VIRTUAL.value
     return MarkingType.SOLID.value
+
+
+def _line_subtype_value(text: str | None, default: LineStringSubtype) -> LineStringSubtype:
+    if text == "virtual":
+        return LineStringSubtype.VIRTUAL
+    return _enum_value(LineStringSubtype, text, default)
 
 
 def save_map_xml(vector_map: VectorMap, output_path: str | Path) -> None:
@@ -335,7 +343,7 @@ def _line_defaults_from_osm_type(way_type: str) -> tuple[LineStringSubtype, Line
     if way_type == "road_border":
         return (
             LineStringSubtype.ROAD_BORDER,
-            LineType.ROAD_EDGE,
+            LineType.LANE_THIN,
             LineRole.ROAD_EDGE,
             MarkingType.SOLID,
             True,
@@ -358,7 +366,7 @@ def _line_defaults_from_osm_type(way_type: str) -> tuple[LineStringSubtype, Line
         )
     return (
         LineStringSubtype.SOLID,
-        LineType.WHITE_LINE,
+        LineType.LANE_THIN,
         LineRole.UNKNOWN,
         MarkingType.SOLID,
         True,
@@ -367,7 +375,7 @@ def _line_defaults_from_osm_type(way_type: str) -> tuple[LineStringSubtype, Line
 
 def _apply_line_subtype_semantics(line: MapLineString) -> None:
     if line.subtype == LineStringSubtype.ROAD_BORDER:
-        line.line_type = LineType.ROAD_EDGE
+        line.line_type = LineType.LANE_THIN
         if line.line_role == LineRole.UNKNOWN:
             line.line_role = LineRole.ROAD_EDGE
         if line.marking_type == MarkingType.UNKNOWN:
@@ -379,8 +387,7 @@ def _apply_line_subtype_semantics(line: MapLineString) -> None:
         if line.marking_type == MarkingType.UNKNOWN:
             line.marking_type = MarkingType.SOLID
     elif line.subtype == LineStringSubtype.DASHED:
-        if line.line_type == LineType.UNKNOWN:
-            line.line_type = LineType.WHITE_LINE
+        line.line_type = LineType.LANE_THIN
         line.marking_type = MarkingType.DASHED
     elif line.subtype == LineStringSubtype.VIRTUAL:
         line.line_type = LineType.VIRTUAL_LINE
@@ -388,6 +395,10 @@ def _apply_line_subtype_semantics(line: MapLineString) -> None:
             line.line_role = LineRole.VIRTUAL_BOUNDARY
         line.marking_type = MarkingType.VIRTUAL
         line.is_observable = False
+    elif line.subtype == LineStringSubtype.SOLID:
+        line.line_type = LineType.LANE_THIN
+        if line.marking_type == MarkingType.UNKNOWN:
+            line.marking_type = MarkingType.SOLID
 
 
 def _load_map_osm(root: ET.Element) -> VectorMap:
@@ -423,7 +434,7 @@ def _load_map_osm(root: ET.Element) -> VectorMap:
         line = MapLineString(
             id=int(way_el.get("id", "0")),
             name=tags.get("name", ""),
-            subtype=_enum_value(LineStringSubtype, tags.get("subtype"), default_subtype),
+            subtype=_line_subtype_value(tags.get("subtype"), default_subtype),
             line_type=_enum_value(LineType, tags.get("line_type"), default_line_type),
             line_role=_enum_value(LineRole, tags.get("line_role"), default_line_role),
             marking_type=_enum_value(MarkingType, tags.get("marking_type"), default_marking_type),
@@ -499,7 +510,7 @@ def _apply_lanelet_member_semantics(
         elif line.id == right_id and line.line_role == LineRole.UNKNOWN:
             line.line_role = LineRole.RIGHT_BOUNDARY
         elif line.id == centerline_id:
-            line.line_type = LineType.LANE_CENTERLINE
+            line.line_type = LineType.VIRTUAL_LINE
             line.line_role = LineRole.LANE_CENTERLINE
             line.marking_type = MarkingType.VIRTUAL
             line.is_observable = False

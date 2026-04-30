@@ -3,6 +3,7 @@ from enum import Enum
 
 class LineType(str, Enum):
     UNKNOWN = "unknown"
+    LANE_THIN = "lane_thin"
     WHITE_LINE = "white_line"
     YELLOW_LINE = "yellow_line"
     STOP_LINE = "stop_line"
@@ -23,7 +24,7 @@ class LineStringSubtype(str, Enum):
     DASHED = "dashed"
     ROAD_BORDER = "road_border"
     STOP_LINE = "stop_line"
-    VIRTUAL = "virtual"
+    VIRTUAL = "virtual_line"
 
 
 class LaneletSubtype(str, Enum):

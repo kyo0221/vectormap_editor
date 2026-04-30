@@ -21,7 +21,7 @@ def test_save_load_roundtrip(tmp_path: Path) -> None:
         MapLineString(
             id=101,
             subtype=LineStringSubtype.SOLID,
-            line_type=LineType.WHITE_LINE,
+            line_type=LineType.LANE_THIN,
             line_role=LineRole.LEFT_BOUNDARY,
             marking_type=MarkingType.SOLID,
             point_ids=[1, 2],
@@ -29,19 +29,27 @@ def test_save_load_roundtrip(tmp_path: Path) -> None:
         MapLineString(
             id=102,
             subtype=LineStringSubtype.DASHED,
-            line_type=LineType.WHITE_LINE,
+            line_type=LineType.LANE_THIN,
             line_role=LineRole.RIGHT_BOUNDARY,
             marking_type=MarkingType.SOLID,
             point_ids=[3, 4],
         ),
         MapLineString(
             id=201,
-            subtype=LineStringSubtype.ROAD_BORDER,
-            line_type=LineType.LANE_CENTERLINE,
+            subtype=LineStringSubtype.VIRTUAL,
+            line_type=LineType.VIRTUAL_LINE,
             line_role=LineRole.LANE_CENTERLINE,
             marking_type=MarkingType.VIRTUAL,
             point_ids=[1, 2],
             is_observable=False,
+        ),
+        MapLineString(
+            id=202,
+            subtype=LineStringSubtype.STOP_LINE,
+            line_type=LineType.STOP_LINE,
+            line_role=LineRole.STOP_LINE,
+            marking_type=MarkingType.SOLID,
+            point_ids=[2, 4],
         ),
     ])
     vm.lanelets.append(
@@ -81,7 +89,8 @@ def test_save_load_roundtrip(tmp_path: Path) -> None:
     assert "<osm" in text
     assert 'k="type" v="line_thin"' in text
     assert 'k="type" v="virtual_line"' in text
-    assert 'k="subtype" v="virtual"' in text
+    assert 'k="type" v="stop_line"' in text
+    assert 'k="subtype" v="virtual_line"' in text
     assert 'k="line_role"' not in text
     assert 'k="line_type"' not in text
     assert 'k="route_role"' not in text
@@ -96,7 +105,7 @@ def test_save_load_roundtrip(tmp_path: Path) -> None:
 
     assert restored.map_id == "test"
     assert len(restored.points) == 4
-    assert len(restored.lines) == 3
+    assert len(restored.lines) == 4
     assert len(restored.lanelets) == 2
     assert len(restored.areas) == 1
     assert len(restored.connections) == 1
@@ -134,7 +143,7 @@ def test_load_lanelet2_way_types(tmp_path: Path) -> None:
     <nd ref="5" />
     <nd ref="6" />
     <tag k="type" v="virtual_line" />
-    <tag k="subtype" v="virtual" />
+    <tag k="subtype" v="virtual_line" />
   </way>
   <relation id="301">
     <member type="way" ref="101" role="left" />
@@ -153,7 +162,7 @@ def test_load_lanelet2_way_types(tmp_path: Path) -> None:
 
     assert len(restored.lines) == 3
     assert restored.lines[0].subtype == LineStringSubtype.SOLID
-    assert restored.lines[1].line_type == LineType.ROAD_EDGE
+    assert restored.lines[1].line_type == LineType.LANE_THIN
     assert restored.lines[2].line_role == LineRole.LANE_CENTERLINE
     assert restored.lines[2].subtype == LineStringSubtype.VIRTUAL
     assert restored.lanelets[0].centerline_id == 103

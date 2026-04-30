@@ -17,7 +17,7 @@ from vector_map_editor.model.enums import (
     MarkingType,
 )
 from vector_map_editor.model.geometry import ASSIST_RESAMPLE_SPACING_M, infer_centerline_points, resample_polyline
-from vector_map_editor.model.map_data import MapArea, MapLineString, MapPoint, VectorMap
+from vector_map_editor.model.map_data import MapArea, MapLanelet, MapLineString, MapPoint, VectorMap
 from vector_map_editor.tools.white_pixel_assist import create_white_mask, snap_to_white_pixel, trace_white_pixel_path
 
 
@@ -30,11 +30,13 @@ class MapCanvas(pg.PlotWidget):
         on_status: Callable[[str], None],
         on_changed: Callable[[], None] | None = None,
         on_selected: Callable[[str, int], None] | None = None,
+        on_subtype_requested: Callable[[FeatureType], str | None] | None = None,
     ) -> None:
         super().__init__()
         self.on_status = on_status
         self.on_changed = on_changed
         self.on_selected = on_selected
+        self.on_subtype_requested = on_subtype_requested
         self.vector_map = VectorMap(map_id="map_001")
 
         self.setBackground("k")
@@ -90,6 +92,9 @@ class MapCanvas(pg.PlotWidget):
             self.line_subtype = LineStringSubtype(subtype)
         elif feature_type == FeatureType.AREA:
             self.area_subtype = AreaSubtype(subtype)
+
+    def set_feature_type(self, feature_type: FeatureType) -> None:
+        self.feature_type = feature_type
 
     def set_assist_enabled(self, enabled: bool) -> None:
         self.assist_enabled = enabled
@@ -446,7 +451,7 @@ class MapCanvas(pg.PlotWidget):
         line = MapLineString(
             id=self._next_line_id,
             subtype=LineStringSubtype.VIRTUAL,
-            line_type=LineType.LANE_CENTERLINE,
+            line_type=LineType.VIRTUAL_LINE,
             line_role=LineRole.LANE_CENTERLINE,
             marking_type=MarkingType.VIRTUAL,
             point_ids=point_ids,
@@ -522,20 +527,33 @@ class MapCanvas(pg.PlotWidget):
             self._temp_line_item.setData([], [])
             return
 
-        if self.feature_type == FeatureType.AREA and self.current_line_point_ids[0] != self.current_line_point_ids[-1]:
-            self.current_line_point_ids.append(self.current_line_point_ids[0])
+        subtype_text = self._request_subtype(self.feature_type)
+        if subtype_text is None:
+            self.on_status("Subtype selection canceled")
+            return
+
+        if self.feature_type == FeatureType.AREA:
+            area_subtype = AreaSubtype(subtype_text)
+            line_subtype = LineStringSubtype.ROAD_BORDER
+            if self.current_line_point_ids[0] != self.current_line_point_ids[-1]:
+                self.current_line_point_ids.append(self.current_line_point_ids[0])
+        else:
+            area_subtype = None
+            line_subtype = LineStringSubtype(subtype_text)
 
         point_ids = self.current_line_point_ids.copy()
         line = MapLineString(
             id=self._next_line_id,
-            subtype=self.line_subtype if self.feature_type == FeatureType.LINE_STRING else LineStringSubtype.ROAD_BORDER,
+            subtype=line_subtype,
             point_ids=point_ids,
         )
         self._apply_default_line_semantics(line)
         self.vector_map.lines.append(line)
         self._next_line_id += 1
         if self.feature_type == FeatureType.AREA:
-            area = MapArea(id=self._next_area_id, subtype=self.area_subtype, outer_line_id=line.id)
+            if area_subtype is None:
+                raise RuntimeError("Area subtype was not selected")
+            area = MapArea(id=self._next_area_id, subtype=area_subtype, outer_line_id=line.id)
             self.vector_map.areas.append(area)
             self._next_area_id += 1
             self._discard_line_point_undo_actions(point_ids)
@@ -649,7 +667,7 @@ class MapCanvas(pg.PlotWidget):
             right_line.line_role = LineRole.RIGHT_BOUNDARY
         centerline = self._line_by_id(centerline_id)
         if centerline is not None:
-            centerline.line_type = LineType.LANE_CENTERLINE
+            centerline.line_type = LineType.VIRTUAL_LINE
             centerline.line_role = LineRole.LANE_CENTERLINE
             centerline.marking_type = MarkingType.VIRTUAL
             centerline.is_observable = False
@@ -731,7 +749,7 @@ class MapCanvas(pg.PlotWidget):
     @staticmethod
     def _apply_default_line_semantics(line: MapLineString) -> None:
         if line.subtype == LineStringSubtype.ROAD_BORDER:
-            line.line_type = LineType.ROAD_EDGE
+            line.line_type = LineType.LANE_THIN
             line.line_role = LineRole.ROAD_EDGE
             line.marking_type = MarkingType.SOLID
         elif line.subtype == LineStringSubtype.STOP_LINE:
@@ -743,10 +761,10 @@ class MapCanvas(pg.PlotWidget):
             line.marking_type = MarkingType.VIRTUAL
             line.is_observable = False
         elif line.subtype == LineStringSubtype.DASHED:
-            line.line_type = LineType.WHITE_LINE
+            line.line_type = LineType.LANE_THIN
             line.marking_type = MarkingType.DASHED
         else:
-            line.line_type = LineType.WHITE_LINE
+            line.line_type = LineType.LANE_THIN
             line.marking_type = MarkingType.SOLID
 
     @staticmethod
@@ -804,19 +822,65 @@ class MapCanvas(pg.PlotWidget):
 
     def _hover_text_at(self, x_pixel: float, y_pixel: float) -> str:
         labels: list[str] = []
-        lanelet_ids = [
-            lanelet.id
+        lanelets = [
+            lanelet
             for lanelet in self.vector_map.lanelets
             if self._point_in_polygon((x_pixel, y_pixel), self._lanelet_polygon(lanelet.id))
         ]
-        if lanelet_ids:
-            labels.append("Lanelet ID: " + ", ".join(str(lid) for lid in lanelet_ids))
+        labels.extend(self._lanelet_hover_text(lanelet) for lanelet in lanelets)
+
+        areas = [
+            area
+            for area in self.vector_map.areas
+            if self._point_in_polygon((x_pixel, y_pixel), self._area_polygon(area))
+        ]
+        labels.extend(self._area_hover_text(area) for area in areas)
 
         nearest_line_id = self._nearest_line_id(x_pixel, y_pixel, threshold_pixel=8.0)
         if nearest_line_id is not None:
-            labels.append(f"LineString ID: {nearest_line_id}")
+            line = self._line_by_id(nearest_line_id)
+            if line is not None:
+                labels.append(self._line_hover_text(line))
 
         return "\n".join(labels)
+
+    def _request_subtype(self, feature_type: FeatureType) -> str | None:
+        if self.on_subtype_requested is not None:
+            return self.on_subtype_requested(feature_type)
+        if feature_type == FeatureType.LINE_STRING:
+            return self.line_subtype.value
+        if feature_type == FeatureType.AREA:
+            return self.area_subtype.value
+        return None
+
+    @staticmethod
+    def _line_hover_text(line: MapLineString) -> str:
+        return (
+            f"LineString ID: {line.id} "
+            f"subtype={line.subtype.value} "
+            f"type={line.line_type.value} "
+            f"marking={line.marking_type.value} "
+            f"observable={str(line.is_observable).lower()}"
+        )
+
+    @staticmethod
+    def _lanelet_hover_text(lanelet: MapLanelet) -> str:
+        members = [
+            f"left={lanelet.left_boundary_line_id}",
+            f"right={lanelet.right_boundary_line_id}",
+        ]
+        if lanelet.centerline_id is not None:
+            members.append(f"center={lanelet.centerline_id}")
+        return (
+            f"Lanelet ID: {lanelet.id} "
+            f"subtype={lanelet.subtype.value} "
+            f"virtual={str(lanelet.is_virtual).lower()} "
+            + " ".join(members)
+        )
+
+    @staticmethod
+    def _area_hover_text(area: MapArea) -> str:
+        return f"Area ID: {area.id} subtype={area.subtype.value} outer={area.outer_line_id}"
 
     def _nearest_line_id(self, x_pixel: float, y_pixel: float, threshold_pixel: float) -> int | None:
         nearest_id: int | None = None
@@ -843,6 +907,12 @@ class MapCanvas(pg.PlotWidget):
         if len(left_points) < 2 or len(right_points) < 2:
             return []
         return left_points + list(reversed(right_points))
+
+    def _area_polygon(self, area: MapArea) -> list[tuple[float, float]]:
+        line = self._line_by_id(area.outer_line_id)
+        if line is None:
+            return []
+        return self._line_pixel_points(line)
 
     @staticmethod
     def _point_in_polygon(point: tuple[float, float], polygon: list[tuple[float, float]]) -> bool:

@@ -13,6 +13,7 @@ from PySide6.QtWidgets import (
     QFormLayout,
     QGroupBox,
     QHBoxLayout,
+    QInputDialog,
     QLabel,
     QLineEdit,
     QMainWindow,
@@ -45,6 +46,7 @@ class MainWindow(QMainWindow):
             on_status=self._set_status,
             on_changed=self._refresh_summary,
             on_selected=self._handle_canvas_selection,
+            on_subtype_requested=self._select_subtype_for_feature,
         )
         self.status_bar = QStatusBar()
         self.setStatusBar(self.status_bar)
@@ -92,15 +94,9 @@ class MainWindow(QMainWindow):
         class_layout = QFormLayout(class_box)
         self.feature_type = QComboBox()
         self.feature_type.addItems([item.value for item in FeatureType])
-        self.subtype = QComboBox()
-        self.turn_direction = QComboBox()
-        self.turn_direction.addItems([item.value for item in ConnectionType])
-        self.feature_type.currentTextChanged.connect(self._update_subtype_options)
-        self.subtype.currentTextChanged.connect(self._apply_canvas_feature)
+        self.feature_type.currentTextChanged.connect(self._apply_canvas_feature_type)
         class_layout.addRow("Type", self.feature_type)
-        class_layout.addRow("Subtype", self.subtype)
-        class_layout.addRow("Turn", self.turn_direction)
-        self._update_subtype_options(self.feature_type.currentText())
+        self._apply_canvas_feature_type()
 
         line_box = QGroupBox("LineString from Points")
         line_layout = QFormLayout(line_box)
@@ -329,23 +325,28 @@ class MainWindow(QMainWindow):
         except Exception as exc:  # noqa: BLE001
             QMessageBox.critical(self, "Open Error", str(exc))
 
-    def _update_subtype_options(self, type_text: str) -> None:
-        self.subtype.blockSignals(True)
-        self.subtype.clear()
-        feature_type = FeatureType(type_text)
-        if feature_type == FeatureType.LINE_STRING:
-            self.subtype.addItems([item.value for item in LineStringSubtype])
-        elif feature_type == FeatureType.LANELET:
-            self.subtype.addItems([item.value for item in LaneletSubtype])
-        elif feature_type == FeatureType.AREA:
-            self.subtype.addItems([item.value for item in AreaSubtype])
-        self.subtype.blockSignals(False)
-        self._apply_canvas_feature()
-
-    def _apply_canvas_feature(self) -> None:
+    def _apply_canvas_feature_type(self, _type_text: str | None = None) -> None:
         feature_type = FeatureType(self.feature_type.currentText())
-        if self.subtype.currentText():
-            self.canvas.set_feature(feature_type, self.subtype.currentText())
+        self.canvas.set_feature_type(feature_type)
+
+    def _select_subtype_for_feature(self, feature_type: FeatureType) -> str | None:
+        options_by_type = {
+            FeatureType.LINE_STRING: [item.value for item in LineStringSubtype],
+            FeatureType.LANELET: [item.value for item in LaneletSubtype],
+            FeatureType.AREA: [item.value for item in AreaSubtype],
+        }
+        options = options_by_type[feature_type]
+        subtype, ok = QInputDialog.getItem(
+            self,
+            "Select subtype",
+            f"{feature_type.value} subtype",
+            options,
+            0,
+            False,
+        )
+        if not ok:
+            return None
+        return subtype
 
     def _start_canvas_pick(self, target: str) -> None:
         self.canvas.set_selection_target(target)
@@ -374,11 +375,11 @@ class MainWindow(QMainWindow):
                 for part in re.split(r"[\s,]+", self.line_point_ids.text().strip())
                 if part
             ]
-            subtype = (
-                LineStringSubtype(self.subtype.currentText())
-                if FeatureType(self.feature_type.currentText()) == FeatureType.LINE_STRING
-                else LineStringSubtype.SOLID
-            )
+            subtype_text = self._select_subtype_for_feature(FeatureType.LINE_STRING)
+            if subtype_text is None:
+                self._set_status("LineString creation canceled")
+                return
+            subtype = LineStringSubtype(subtype_text)
             self.canvas.create_line_from_point_ids(point_ids, subtype)
             self._refresh_summary()
         except ValueError:
@@ -398,8 +399,11 @@ class MainWindow(QMainWindow):
                 raise RuntimeError(f"Right LineString not found: {right_id}")
             if center_id is not None and not self.canvas.line_exists(center_id):
                 raise RuntimeError(f"Centerline LineString not found: {center_id}")
-            subtype = LaneletSubtype(self.subtype.currentText()) if FeatureType(self.feature_type.currentText()) == FeatureType.LANELET else LaneletSubtype.ROAD
-            turn_direction = ConnectionType(self.turn_direction.currentText())
+            subtype_text = self._select_subtype_for_feature(FeatureType.LANELET)
+            if subtype_text is None:
+                self._set_status("Lanelet creation canceled")
+                return
+            subtype = LaneletSubtype(subtype_text)
             next_id = max((l.id for l in self.canvas.vector_map.lanelets), default=300) + 1
             lanelet = MapLanelet(
                 id=next_id,
@@ -408,7 +412,6 @@ class MainWindow(QMainWindow):
                 right_boundary_line_id=right_id,
                 centerline_id=center_id,
                 is_virtual=self.lanelet_is_virtual.isChecked(),
-                turn_direction=turn_direction,
             )
             self.canvas.vector_map.lanelets.append(lanelet)
             self.canvas.apply_lanelet_boundary_semantics(left_id, right_id, center_id)
