@@ -101,7 +101,7 @@ vector-map-editor
 
 キャンバス上のクリック位置は背景画像のpixel座標として取得され、内部データと保存ファイルではlocal meter座標として管理されます。local座標の原点は画像原点です。
 
-変換には、提供されたECEF→pixel変換式の線形部分を逆変換したものを使用します。
+local座標はRViz向けに、画像右方向をX正、画像上方向をY正として保存します。画像のpixel比率を保つため、pixel→meter変換は一様スケール `PIXELS_PER_METER` を使用します。
 
 ### Laneletを作成する
 

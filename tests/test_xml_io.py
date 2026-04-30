@@ -2,7 +2,7 @@ from pathlib import Path
 
 import pytest
 
-from vector_map_editor.model.coordinates import local_meter_to_pixel, pixel_to_local_meter
+from vector_map_editor.model.coordinates import PIXELS_PER_METER, local_meter_to_pixel, pixel_to_local_meter
 from vector_map_editor.model.enums import ConnectionType, LaneletSubtype, LineRole, LineStringSubtype, LineType, MarkingType
 from vector_map_editor.model.geometry import infer_centerline_points, resample_polyline
 from vector_map_editor.model.map_data import LaneConnection, MapArea, MapLanelet, MapLineString, MapPoint, VectorMap
@@ -177,6 +177,8 @@ def test_pixel_local_meter_roundtrip() -> None:
 
     assert restored_x_pixel == pytest.approx(x_pixel)
     assert restored_y_pixel == pytest.approx(y_pixel)
+    assert pixel_to_local_meter(0.0, PIXELS_PER_METER) == pytest.approx((0.0, -1.0))
+    assert local_meter_to_pixel(0.0, 1.0) == pytest.approx((0.0, -PIXELS_PER_METER))
 
 
 def test_resample_polyline_uses_three_meter_spacing() -> None:
