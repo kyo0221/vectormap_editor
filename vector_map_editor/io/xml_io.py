@@ -29,6 +29,44 @@ def _text(value: object) -> str:
     return "" if value is None else str(value)
 
 
+def _lanelet2_way_type(line: MapLineString) -> str:
+    if line.subtype == LineStringSubtype.STOP_LINE or line.line_type == LineType.STOP_LINE:
+        return "stop_line"
+    if (
+        line.line_type in {LineType.LANE_CENTERLINE, LineType.VIRTUAL_LINE}
+        or line.line_role in {LineRole.LANE_CENTERLINE, LineRole.VIRTUAL_BOUNDARY}
+        or line.subtype == LineStringSubtype.VIRTUAL
+    ):
+        return "virtual_line"
+    return "line_thin"
+
+
+def _lanelet2_way_subtype(line: MapLineString) -> str:
+    if (
+        line.line_type in {LineType.LANE_CENTERLINE, LineType.VIRTUAL_LINE}
+        or line.line_role in {LineRole.LANE_CENTERLINE, LineRole.VIRTUAL_BOUNDARY}
+        or line.subtype == LineStringSubtype.VIRTUAL
+    ):
+        return LineStringSubtype.VIRTUAL.value
+    return line.subtype.value
+
+
+def _lanelet2_marking_type(line: MapLineString) -> str:
+    if line.marking_type != MarkingType.UNKNOWN:
+        return line.marking_type.value
+    if line.subtype == LineStringSubtype.DASHED:
+        return MarkingType.DASHED.value
+    if line.subtype == LineStringSubtype.VIRTUAL or line.line_type == LineType.LANE_CENTERLINE:
+        return MarkingType.VIRTUAL.value
+    return MarkingType.SOLID.value
+
+
+def _line_subtype_value(text: str | None, default: LineStringSubtype) -> LineStringSubtype:
+    if text == "virtual":
+        return LineStringSubtype.VIRTUAL
+    return _enum_value(LineStringSubtype, text, default)
+
+
 def save_map_xml(vector_map: VectorMap, output_path: str | Path) -> None:
     validate_vector_map(vector_map)
 
@@ -69,8 +107,10 @@ def save_map_xml(vector_map: VectorMap, output_path: str | Path) -> None:
         )
         for pid in line.point_ids:
             ET.SubElement(way_el, "nd", {"ref": _text(pid)})
-        ET.SubElement(way_el, "tag", {"k": "type", "v": "LineString"})
-        ET.SubElement(way_el, "tag", {"k": "subtype", "v": line.subtype.value})
+        ET.SubElement(way_el, "tag", {"k": "type", "v": _lanelet2_way_type(line)})
+        ET.SubElement(way_el, "tag", {"k": "subtype", "v": _lanelet2_way_subtype(line)})
+        ET.SubElement(way_el, "tag", {"k": "marking_type", "v": _lanelet2_marking_type(line)})
+        ET.SubElement(way_el, "tag", {"k": "is_observable", "v": _text(line.is_observable).lower()})
         if line.name:
             ET.SubElement(way_el, "tag", {"k": "name", "v": line.name})
 
@@ -104,6 +144,7 @@ def save_map_xml(vector_map: VectorMap, output_path: str | Path) -> None:
             ET.SubElement(relation_el, "member", {"type": "way", "ref": _text(line_id), "role": "ref_line"})
         ET.SubElement(relation_el, "tag", {"k": "subtype", "v": lanelet.subtype.value})
         ET.SubElement(relation_el, "tag", {"k": "type", "v": "lanelet"})
+        ET.SubElement(relation_el, "tag", {"k": "is_virtual", "v": _text(lanelet.is_virtual).lower()})
         if lanelet.turn_direction != ConnectionType.UNKNOWN:
             ET.SubElement(relation_el, "tag", {"k": "turn_direction", "v": lanelet.turn_direction.value})
         if lanelet.name:
@@ -289,6 +330,77 @@ def _tags(element: ET.Element) -> dict[str, str]:
     return {tag.get("k", ""): tag.get("v", "") for tag in element.findall("./tag")}
 
 
+def _enum_value(enum_type, text: str | None, default):
+    if text in (None, ""):
+        return default
+    try:
+        return enum_type(text)
+    except ValueError:
+        return default
+
+
+def _line_defaults_from_osm_type(way_type: str) -> tuple[LineStringSubtype, LineType, LineRole, MarkingType, bool]:
+    if way_type == "road_border":
+        return (
+            LineStringSubtype.ROAD_BORDER,
+            LineType.LANE_THIN,
+            LineRole.ROAD_EDGE,
+            MarkingType.SOLID,
+            True,
+        )
+    if way_type == "stop_line":
+        return (
+            LineStringSubtype.STOP_LINE,
+            LineType.STOP_LINE,
+            LineRole.STOP_LINE,
+            MarkingType.SOLID,
+            True,
+        )
+    if way_type in {"virtual", "virtual_line"}:
+        return (
+            LineStringSubtype.VIRTUAL,
+            LineType.VIRTUAL_LINE,
+            LineRole.VIRTUAL_BOUNDARY,
+            MarkingType.VIRTUAL,
+            False,
+        )
+    return (
+        LineStringSubtype.SOLID,
+        LineType.LANE_THIN,
+        LineRole.UNKNOWN,
+        MarkingType.SOLID,
+        True,
+    )
+
+
+def _apply_line_subtype_semantics(line: MapLineString) -> None:
+    if line.subtype == LineStringSubtype.ROAD_BORDER:
+        line.line_type = LineType.LANE_THIN
+        if line.line_role == LineRole.UNKNOWN:
+            line.line_role = LineRole.ROAD_EDGE
+        if line.marking_type == MarkingType.UNKNOWN:
+            line.marking_type = MarkingType.SOLID
+    elif line.subtype == LineStringSubtype.STOP_LINE:
+        line.line_type = LineType.STOP_LINE
+        if line.line_role == LineRole.UNKNOWN:
+            line.line_role = LineRole.STOP_LINE
+        if line.marking_type == MarkingType.UNKNOWN:
+            line.marking_type = MarkingType.SOLID
+    elif line.subtype == LineStringSubtype.DASHED:
+        line.line_type = LineType.LANE_THIN
+        line.marking_type = MarkingType.DASHED
+    elif line.subtype == LineStringSubtype.VIRTUAL:
+        line.line_type = LineType.VIRTUAL_LINE
+        if line.line_role == LineRole.UNKNOWN:
+            line.line_role = LineRole.VIRTUAL_BOUNDARY
+        line.marking_type = MarkingType.VIRTUAL
+        line.is_observable = False
+    elif line.subtype == LineStringSubtype.SOLID:
+        line.line_type = LineType.LANE_THIN
+        if line.marking_type == MarkingType.UNKNOWN:
+            line.marking_type = MarkingType.SOLID
+
+
 def _load_map_osm(root: ET.Element) -> VectorMap:
     vector_map = VectorMap(
         map_id=root.get("map_id", "map_001"),
@@ -312,17 +424,25 @@ def _load_map_osm(root: ET.Element) -> VectorMap:
 
     for way_el in root.findall("./way"):
         tags = _tags(way_el)
-        if tags.get("type") != "LineString":
+        way_type = tags.get("type", "")
+        if way_type not in {"LineString", "line_thin", "line_thick", "road_border", "stop_line", "virtual", "virtual_line"}:
             continue
-        point_ids = [int(ref.get("ref", "0")) for ref in way_el.findall("./nd")]
-        vector_map.lines.append(
-            MapLineString(
-                id=int(way_el.get("id", "0")),
-                name=tags.get("name", ""),
-                subtype=LineStringSubtype(tags.get("subtype", LineStringSubtype.SOLID.value)),
-                point_ids=point_ids,
-            )
+        default_subtype, default_line_type, default_line_role, default_marking_type, default_observable = (
+            _line_defaults_from_osm_type(way_type)
         )
+        point_ids = [int(ref.get("ref", "0")) for ref in way_el.findall("./nd")]
+        line = MapLineString(
+            id=int(way_el.get("id", "0")),
+            name=tags.get("name", ""),
+            subtype=_line_subtype_value(tags.get("subtype"), default_subtype),
+            line_type=_enum_value(LineType, tags.get("line_type"), default_line_type),
+            line_role=_enum_value(LineRole, tags.get("line_role"), default_line_role),
+            marking_type=_enum_value(MarkingType, tags.get("marking_type"), default_marking_type),
+            point_ids=point_ids,
+            is_observable=_bool(tags.get("is_observable"), default=default_observable),
+        )
+        _apply_line_subtype_semantics(line)
+        vector_map.lines.append(line)
 
     for relation_el in root.findall("./relation"):
         tags = _tags(relation_el)
@@ -337,14 +457,16 @@ def _load_map_osm(root: ET.Element) -> VectorMap:
                 MapLanelet(
                     id=int(relation_el.get("id", "0")),
                     name=tags.get("name", ""),
-                    subtype=LaneletSubtype(tags.get("subtype", LaneletSubtype.ROAD.value)),
+                    subtype=_enum_value(LaneletSubtype, tags.get("subtype"), LaneletSubtype.ROAD),
                     left_boundary_line_id=left_id,
                     right_boundary_line_id=right_id,
                     centerline_id=centerline_id,
                     associated_line_ids=assoc_ids,
+                    is_virtual=_bool(tags.get("is_virtual"), default=False),
                     turn_direction=ConnectionType(tags.get("turn_direction", ConnectionType.UNKNOWN.value)),
                 )
             )
+            _apply_lanelet_member_semantics(vector_map, left_id, right_id, centerline_id)
         elif relation_type == "area":
             outer_id = _member_ref(members, "outer")
             if outer_id is None:
@@ -374,6 +496,24 @@ def _load_map_osm(root: ET.Element) -> VectorMap:
 
     validate_vector_map(vector_map)
     return vector_map
+
+
+def _apply_lanelet_member_semantics(
+    vector_map: VectorMap,
+    left_id: int | None,
+    right_id: int | None,
+    centerline_id: int | None,
+) -> None:
+    for line in vector_map.lines:
+        if line.id == left_id and line.line_role == LineRole.UNKNOWN:
+            line.line_role = LineRole.LEFT_BOUNDARY
+        elif line.id == right_id and line.line_role == LineRole.UNKNOWN:
+            line.line_role = LineRole.RIGHT_BOUNDARY
+        elif line.id == centerline_id:
+            line.line_type = LineType.VIRTUAL_LINE
+            line.line_role = LineRole.LANE_CENTERLINE
+            line.marking_type = MarkingType.VIRTUAL
+            line.is_observable = False
 
 
 def _member_ref(members: list[ET.Element], role: str) -> int | None:

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 import cv2
@@ -12,6 +13,7 @@ from PySide6.QtWidgets import (
     QFormLayout,
     QGroupBox,
     QHBoxLayout,
+    QInputDialog,
     QLabel,
     QLineEdit,
     QMainWindow,
@@ -40,7 +42,12 @@ class MainWindow(QMainWindow):
         self.setWindowTitle("Vector Map Editor (OSM XML)")
         self.resize(1400, 860)
 
-        self.canvas = MapCanvas(on_status=self._set_status, on_changed=self._refresh_summary)
+        self.canvas = MapCanvas(
+            on_status=self._set_status,
+            on_changed=self._refresh_summary,
+            on_selected=self._handle_canvas_selection,
+            on_subtype_requested=self._select_subtype_for_feature,
+        )
         self.status_bar = QStatusBar()
         self.setStatusBar(self.status_bar)
 
@@ -87,43 +94,54 @@ class MainWindow(QMainWindow):
         class_layout = QFormLayout(class_box)
         self.feature_type = QComboBox()
         self.feature_type.addItems([item.value for item in FeatureType])
-        self.subtype = QComboBox()
-        self.turn_direction = QComboBox()
-        self.turn_direction.addItems([item.value for item in ConnectionType])
-        self.feature_type.currentTextChanged.connect(self._update_subtype_options)
-        self.subtype.currentTextChanged.connect(self._apply_canvas_feature)
+        self.feature_type.currentTextChanged.connect(self._apply_canvas_feature_type)
         class_layout.addRow("Type", self.feature_type)
-        class_layout.addRow("Subtype", self.subtype)
-        class_layout.addRow("Turn", self.turn_direction)
-        self._update_subtype_options(self.feature_type.currentText())
+        self._apply_canvas_feature_type()
+
+        line_box = QGroupBox("LineString from Points")
+        line_layout = QFormLayout(line_box)
+        self.line_point_ids = QLineEdit()
+        self.line_point_ids.setPlaceholderText("1, 2, 3")
+        btn_line_from_points = QPushButton("Create LineString")
+        btn_line_from_points.clicked.connect(self._create_line_from_point_ids)
+        line_layout.addRow("Point IDs", self.line_point_ids)
+        line_layout.addRow(btn_line_from_points)
 
         lanelet_box = QGroupBox("Lanelet")
         lanelet_layout = QFormLayout(lanelet_box)
         self.lanelet_left = QLineEdit()
         self.lanelet_right = QLineEdit()
         self.lanelet_center = QLineEdit()
+        self.lanelet_auto_center = QCheckBox("Auto centerline")
+        self.lanelet_auto_center.setChecked(True)
+        self.lanelet_is_virtual = QCheckBox("Virtual lanelet")
         btn_lanelet = QPushButton("Create Lanelet")
         btn_lanelet.clicked.connect(self._create_lanelet)
 
-        lanelet_layout.addRow("Left line ID", self.lanelet_left)
-        lanelet_layout.addRow("Right line ID", self.lanelet_right)
-        lanelet_layout.addRow("Centerline ID (optional)", self.lanelet_center)
+        lanelet_layout.addRow("Left line ID", self._line_pick_row(self.lanelet_left, "lanelet_left"))
+        lanelet_layout.addRow("Right line ID", self._line_pick_row(self.lanelet_right, "lanelet_right"))
+        lanelet_layout.addRow("Centerline ID", self._line_pick_row(self.lanelet_center, "lanelet_center"))
+        lanelet_layout.addRow(self.lanelet_auto_center)
+        lanelet_layout.addRow(self.lanelet_is_virtual)
         lanelet_layout.addRow(btn_lanelet)
 
         conn_box = QGroupBox("Connection")
         conn_layout = QFormLayout(conn_box)
         self.conn_from = QLineEdit()
         self.conn_to = QLineEdit()
-        self.conn_type = QLineEdit(ConnectionType.STRAIGHT.value)
+        self.conn_type = QComboBox()
+        self.conn_type.addItems([item.value for item in ConnectionType])
+        self.conn_type.setCurrentText(ConnectionType.STRAIGHT.value)
         btn_conn = QPushButton("Create Connection")
         btn_conn.clicked.connect(self._create_connection)
 
-        conn_layout.addRow("From lanelet ID", self.conn_from)
-        conn_layout.addRow("To lanelet ID", self.conn_to)
+        conn_layout.addRow("From lanelet ID", self._lanelet_pick_row(self.conn_from, "conn_from"))
+        conn_layout.addRow("To lanelet ID", self._lanelet_pick_row(self.conn_to, "conn_to"))
         conn_layout.addRow("Type", self.conn_type)
         conn_layout.addRow(btn_conn)
 
         edit_layout.addWidget(class_box)
+        edit_layout.addWidget(line_box)
         edit_layout.addWidget(lanelet_box)
         edit_layout.addWidget(conn_box)
         edit_layout.addStretch(1)
@@ -141,9 +159,9 @@ class MainWindow(QMainWindow):
         btn_infer_center = QPushButton("Infer Center Line")
         btn_infer_center.clicked.connect(self._infer_center_line)
         assist_form.addRow("Assist", self.assist_enabled)
-        assist_form.addRow("LineString ID", self.resample_line_id)
+        assist_form.addRow("LineString ID", self._line_pick_row(self.resample_line_id, "resample_line"))
         assist_form.addRow(btn_resample)
-        assist_form.addRow("Lanelet ID", self.infer_center_lanelet_id)
+        assist_form.addRow("Lanelet ID", self._lanelet_pick_row(self.infer_center_lanelet_id, "infer_center_lanelet"))
         assist_form.addRow(btn_infer_center)
         assist_layout.addWidget(assist_box)
         assist_layout.addStretch(1)
@@ -174,6 +192,19 @@ class MainWindow(QMainWindow):
         layout.addStretch(1)
 
         return panel
+
+    def _line_pick_row(self, editor: QLineEdit, target: str) -> QWidget:
+        row = QWidget()
+        layout = QHBoxLayout(row)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.addWidget(editor)
+        btn_pick = QPushButton("Pick")
+        btn_pick.clicked.connect(lambda: self._start_canvas_pick(target))
+        layout.addWidget(btn_pick)
+        return row
+
+    def _lanelet_pick_row(self, editor: QLineEdit, target: str) -> QWidget:
+        return self._line_pick_row(editor, target)
 
     def _build_right_panel(self) -> QWidget:
         panel = QWidget()
@@ -294,23 +325,67 @@ class MainWindow(QMainWindow):
         except Exception as exc:  # noqa: BLE001
             QMessageBox.critical(self, "Open Error", str(exc))
 
-    def _update_subtype_options(self, type_text: str) -> None:
-        self.subtype.blockSignals(True)
-        self.subtype.clear()
-        feature_type = FeatureType(type_text)
-        if feature_type == FeatureType.LINE_STRING:
-            self.subtype.addItems([item.value for item in LineStringSubtype])
-        elif feature_type == FeatureType.LANELET:
-            self.subtype.addItems([item.value for item in LaneletSubtype])
-        elif feature_type == FeatureType.AREA:
-            self.subtype.addItems([item.value for item in AreaSubtype])
-        self.subtype.blockSignals(False)
-        self._apply_canvas_feature()
-
-    def _apply_canvas_feature(self) -> None:
+    def _apply_canvas_feature_type(self, _type_text: str | None = None) -> None:
         feature_type = FeatureType(self.feature_type.currentText())
-        if self.subtype.currentText():
-            self.canvas.set_feature(feature_type, self.subtype.currentText())
+        self.canvas.set_feature_type(feature_type)
+
+    def _select_subtype_for_feature(self, feature_type: FeatureType) -> str | None:
+        options_by_type = {
+            FeatureType.LINE_STRING: [item.value for item in LineStringSubtype],
+            FeatureType.LANELET: [item.value for item in LaneletSubtype],
+            FeatureType.AREA: [item.value for item in AreaSubtype],
+        }
+        options = options_by_type[feature_type]
+        subtype, ok = QInputDialog.getItem(
+            self,
+            "Select subtype",
+            f"{feature_type.value} subtype",
+            options,
+            0,
+            False,
+        )
+        if not ok:
+            return None
+        return subtype
+
+    def _start_canvas_pick(self, target: str) -> None:
+        self.canvas.set_selection_target(target)
+        self._set_status("Click an item on the canvas")
+
+    def _handle_canvas_selection(self, target: str, item_id: int) -> None:
+        editors = {
+            "lanelet_left": self.lanelet_left,
+            "lanelet_right": self.lanelet_right,
+            "lanelet_center": self.lanelet_center,
+            "resample_line": self.resample_line_id,
+            "conn_from": self.conn_from,
+            "conn_to": self.conn_to,
+            "infer_center_lanelet": self.infer_center_lanelet_id,
+        }
+        editor = editors.get(target)
+        if editor is None:
+            return
+        editor.setText(str(item_id))
+        self._set_status(f"Selected ID: {item_id}")
+
+    def _create_line_from_point_ids(self) -> None:
+        try:
+            point_ids = [
+                int(part)
+                for part in re.split(r"[\s,]+", self.line_point_ids.text().strip())
+                if part
+            ]
+            subtype_text = self._select_subtype_for_feature(FeatureType.LINE_STRING)
+            if subtype_text is None:
+                self._set_status("LineString creation canceled")
+                return
+            subtype = LineStringSubtype(subtype_text)
+            self.canvas.create_line_from_point_ids(point_ids, subtype)
+            self._refresh_summary()
+        except ValueError:
+            QMessageBox.warning(self, "Input Error", "Point IDs must be integers")
+        except RuntimeError as exc:
+            QMessageBox.warning(self, "LineString Error", str(exc))
 
     def _create_lanelet(self) -> None:
         try:
@@ -318,8 +393,17 @@ class MainWindow(QMainWindow):
             right_id = int(self.lanelet_right.text().strip())
             center_text = self.lanelet_center.text().strip()
             center_id = int(center_text) if center_text else None
-            subtype = LaneletSubtype(self.subtype.currentText()) if FeatureType(self.feature_type.currentText()) == FeatureType.LANELET else LaneletSubtype.ROAD
-            turn_direction = ConnectionType(self.turn_direction.currentText())
+            if not self.canvas.line_exists(left_id):
+                raise RuntimeError(f"Left LineString not found: {left_id}")
+            if not self.canvas.line_exists(right_id):
+                raise RuntimeError(f"Right LineString not found: {right_id}")
+            if center_id is not None and not self.canvas.line_exists(center_id):
+                raise RuntimeError(f"Centerline LineString not found: {center_id}")
+            subtype_text = self._select_subtype_for_feature(FeatureType.LANELET)
+            if subtype_text is None:
+                self._set_status("Lanelet creation canceled")
+                return
+            subtype = LaneletSubtype(subtype_text)
             next_id = max((l.id for l in self.canvas.vector_map.lanelets), default=300) + 1
             lanelet = MapLanelet(
                 id=next_id,
@@ -327,21 +411,30 @@ class MainWindow(QMainWindow):
                 left_boundary_line_id=left_id,
                 right_boundary_line_id=right_id,
                 centerline_id=center_id,
-                turn_direction=turn_direction,
+                is_virtual=self.lanelet_is_virtual.isChecked(),
             )
             self.canvas.vector_map.lanelets.append(lanelet)
+            self.canvas.apply_lanelet_boundary_semantics(left_id, right_id, center_id)
             self.canvas.register_lanelet_created(lanelet.id)
+            if center_id is None and self.lanelet_auto_center.isChecked():
+                self.canvas.infer_center_line(lanelet.id, spacing_m=ASSIST_RESAMPLE_SPACING_M)
             self.canvas.redraw_all()
             self._refresh_summary()
             self._set_status(f"Lanelet created: {lanelet.id}")
         except ValueError:
             QMessageBox.warning(self, "Input Error", "Lanelet line IDs must be integers")
+        except RuntimeError as exc:
+            QMessageBox.warning(self, "Lanelet Error", str(exc))
 
     def _create_connection(self) -> None:
         try:
             from_id = int(self.conn_from.text().strip())
             to_id = int(self.conn_to.text().strip())
-            conn_type = ConnectionType(self.conn_type.text().strip())
+            if not self.canvas.lanelet_exists(from_id):
+                raise RuntimeError(f"From Lanelet not found: {from_id}")
+            if not self.canvas.lanelet_exists(to_id):
+                raise RuntimeError(f"To Lanelet not found: {to_id}")
+            conn_type = ConnectionType(self.conn_type.currentText())
             next_id = max((c.id for c in self.canvas.vector_map.connections), default=400) + 1
             conn = LaneConnection(
                 id=next_id,
@@ -359,6 +452,8 @@ class MainWindow(QMainWindow):
                 "Input Error",
                 "Connection values are invalid (IDs must be ints, type must match enum)",
             )
+        except RuntimeError as exc:
+            QMessageBox.warning(self, "Connection Error", str(exc))
 
     def _resample_line_string(self) -> None:
         try:

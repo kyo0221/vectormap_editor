@@ -1,30 +1,45 @@
 from __future__ import annotations
 
 
-ECEF_TO_PIXEL_A = -3.39704
-ECEF_TO_PIXEL_B = -4.60004
-ECEF_TO_PIXEL_C = -7.74396
-ECEF_TO_PIXEL_D = 5.92272
+PIXEL_TO_ENU_A = 0.1732124950837092
+PIXEL_TO_ENU_B = 0.013293993882809219
+PIXEL_TO_ENU_C = -96.52188755507068
+PIXEL_TO_ENU_D = 0.016913960339493113
+PIXEL_TO_ENU_E = -0.17385227537455333
+PIXEL_TO_ENU_F = 47.57187927052827
 
-_DET = ECEF_TO_PIXEL_A * ECEF_TO_PIXEL_D - ECEF_TO_PIXEL_B * ECEF_TO_PIXEL_C
+_DET = PIXEL_TO_ENU_A * PIXEL_TO_ENU_E - PIXEL_TO_ENU_B * PIXEL_TO_ENU_D
 if _DET == 0.0:
-    raise ValueError("ECEF to pixel transform matrix is singular")
+    raise ValueError("Pixel-to-ENU transform matrix is singular")
+
+ENU_TO_PIXEL_A = PIXEL_TO_ENU_E / _DET
+ENU_TO_PIXEL_B = -PIXEL_TO_ENU_B / _DET
+ENU_TO_PIXEL_D = -PIXEL_TO_ENU_D / _DET
+ENU_TO_PIXEL_E = PIXEL_TO_ENU_A / _DET
+ENU_TO_PIXEL_C = -(ENU_TO_PIXEL_A * PIXEL_TO_ENU_C + ENU_TO_PIXEL_B * PIXEL_TO_ENU_F)
+ENU_TO_PIXEL_F = -(ENU_TO_PIXEL_D * PIXEL_TO_ENU_C + ENU_TO_PIXEL_E * PIXEL_TO_ENU_F)
+
+PIXEL_TO_ENU_MATRIX = (
+    (PIXEL_TO_ENU_A, PIXEL_TO_ENU_B, PIXEL_TO_ENU_C),
+    (PIXEL_TO_ENU_D, PIXEL_TO_ENU_E, PIXEL_TO_ENU_F),
+    (0.0, 0.0, 1.0),
+)
+ENU_TO_PIXEL_MATRIX = (
+    (ENU_TO_PIXEL_A, ENU_TO_PIXEL_B, ENU_TO_PIXEL_C),
+    (ENU_TO_PIXEL_D, ENU_TO_PIXEL_E, ENU_TO_PIXEL_F),
+    (0.0, 0.0, 1.0),
+)
 
 
-def local_meter_to_pixel(x_m: float, y_m: float) -> tuple[float, float]:
-    """Convert local meter coordinates to image pixel coordinates.
+def pixel_to_enu(x_pixel: float, y_pixel: float) -> tuple[float, float]:
+    """Convert image pixel coordinates to ENU meter coordinates."""
+    east_m = PIXEL_TO_ENU_A * x_pixel + PIXEL_TO_ENU_B * y_pixel + PIXEL_TO_ENU_C
+    north_m = PIXEL_TO_ENU_D * x_pixel + PIXEL_TO_ENU_E * y_pixel + PIXEL_TO_ENU_F
+    return east_m, north_m
 
-    The local origin is the image origin. Only the linear part of the provided
-    ECEF-to-pixel affine transform is used because local coordinates are
-    relative to the image origin.
-    """
-    x_pixel = ECEF_TO_PIXEL_A * x_m + ECEF_TO_PIXEL_B * y_m
-    y_pixel = ECEF_TO_PIXEL_C * x_m + ECEF_TO_PIXEL_D * y_m
+
+def enu_to_pixel(east_m: float, north_m: float) -> tuple[float, float]:
+    """Convert ENU meter coordinates to image pixel coordinates."""
+    x_pixel = ENU_TO_PIXEL_A * east_m + ENU_TO_PIXEL_B * north_m + ENU_TO_PIXEL_C
+    y_pixel = ENU_TO_PIXEL_D * east_m + ENU_TO_PIXEL_E * north_m + ENU_TO_PIXEL_F
     return x_pixel, y_pixel
-
-
-def pixel_to_local_meter(x_pixel: float, y_pixel: float) -> tuple[float, float]:
-    """Convert image pixel coordinates to local meter coordinates."""
-    x_m = (ECEF_TO_PIXEL_D * x_pixel - ECEF_TO_PIXEL_B * y_pixel) / _DET
-    y_m = (-ECEF_TO_PIXEL_C * x_pixel + ECEF_TO_PIXEL_A * y_pixel) / _DET
-    return x_m, y_m
